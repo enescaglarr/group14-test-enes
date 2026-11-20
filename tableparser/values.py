@@ -1,0 +1,138 @@
+import re
+
+NA = {"n/a", "na", "-", "–", "—", ""}
+
+KNOWN_UNITS = {"%", "€", "$", "EUR", "USD", "kg", "ms", "g", "t", "m", "km", "h", "s"}
+UNIT_FIXES = {"rns": "ms", "m5": "ms", "rn5": "ms", "k9": "kg", "kq": "kg", "Kg": "kg", "o/o": "%"}
+
+def split_unit(s: str):
+    m = re.fullmatch(r"(.*?[\d)])\s*(%|€|\$|[A-Za-z]{1,4})", s.strip())
+    return (m.group(1), m.group(2)) if m else (s, None)
+
+NUM = re.compile(r"(\d{1,3}(?:[., ]\d{3})*|\d+)(?:([.,])(\d{2}))?")
+
+CONFUSABLE = str.maketrans({"O": "0", "o": "0", "D": "0", "l": "1", "I": "1", "|": "1",
+                            "S": "5", "B": "8", "Z": "2"})
+
+def fix_digit_confusions(s: str):
+    """Inside number-like words only (has a digit, rest digits/separators/confusables),
+    map OCR letter look-alikes back to digits: 'O76' -> '076'.
+    Words without a digit ('note', 'ms', 'kg', 'n/a', 'Sulfur') are left alone."""
+    out, changed = [], False
+    for w in s.split(" "):
+        if (re.search(r"\d", w) and re.fullmatch(r"[\d.,:()\-OoDlI|SBZ]+", w)
+                and re.search(r"[OoDlI|SBZ]", w)):
+            w, changed = w.translate(CONFUSABLE), True
+        out.append(w)
+    return " ".join(out), changed
+
+
+def parse_cell(raw: str):
+    s = raw.replace("−", "-").replace(" ", " ").replace(" ", " ")
+    s, digit_fixed = fix_digit_confusions(re.sub(r"\s+", " ", s).strip())
+    if s.lower() in NA:
+        return {"kind": "empty", "value": None, "unit": None, "flag": "ok"}
+    if not re.search(r"[0-9A-Za-z€$%]", s):
+        # only specks / punctuation in an otherwise blank cell, e.g. "." or "·:"
+        return {"kind": "empty", "value": None, "unit": None, "flag": "noise_only"}
+    s, unit = split_unit(s)
+    unit_flag = None
+    if unit is None:
+        # OCR-damaged unit like "m5" or "rns": number first, then a short junk suffix
+        m2 = re.fullmatch(r"([-(]?\d[\d.,: ]*\d\)?-?)\s+([A-Za-z0-9€$%]{1,4})", s)
+        if m2 and re.search(r"[A-Za-z€$%]", m2.group(2)):
+            s, unit, unit_flag = m2.group(1), m2.group(2), "unit_check"
+    if re.search(r"[A-Za-z]", s):
+        return {"kind": "text", "value": None, "text": raw.strip(), "unit": None, "flag": "ok"}
+
+    neg, flag = False, "ok"
+    s = s.strip()
+    opens, closes = s.startswith("("), s.endswith(")")
+    if opens or closes:
+        neg, s = True, s.strip("()").strip()
+        if opens != closes:
+            flag = "check_sign"
+    if s.endswith("-"):
+        neg, s = True, s[:-1].strip()
+    if s.startswith("-"):
+        neg, s = True, s[1:].strip()
+
+    m = NUM.fullmatch(s)
+    if not m:
+        return {"kind": "number", "value": "UNPARSED", "raw": raw, "unit": unit, "flag": "check"}
+    int_part, sep, dec = m.groups()
+    value = float(re.sub(r"\D", "", int_part) + ("." + dec if dec else ""))
+    if not dec and re.fullmatch(r"\d{1,3}[.,]\d{3}", int_part):
+        flag = "ambiguous_separator"   # "1.234": thousands or decimal? decide by table vote
+    if unit is not None:
+        unit = UNIT_FIXES.get(unit, unit)
+        if unit not in KNOWN_UNITS:
+            unit_flag = "unit_check"
+    if unit_flag and flag == "ok":
+        flag = unit_flag
+    if digit_fixed and flag == "ok":
+        flag = "digit_fixed"
+    return {"kind": "number", "value": -value if neg else value, "unit": unit, "flag": flag,
+            "decimals": len(dec) if dec else 0}
+
+
+def repair_with_table_format(raw: str, table_decimals: int):
+    """Fallback for fax noise: when a cell is UNPARSED but the table vote says every
+    number has `table_decimals` decimals, ignore the (noisy) punctuation, keep only
+    the digits and put the decimal point back by position."""
+    s = raw.replace("−", "-")
+    s, unit = split_unit(s.strip())
+    neg = s.strip().startswith(("-", "(")) or s.strip().endswith((")", "-"))
+    digits = re.sub(r"\D", "", s)
+    if len(digits) <= table_decimals:
+        return {"kind": "number", "value": "UNPARSED", "raw": raw, "unit": unit, "flag": "check"}
+    value = int(digits) / (10 ** table_decimals)
+    return {"kind": "number", "value": -value if neg else value, "unit": unit, "flag": "repaired"}
+
+
+def table_decimals_vote(raw_cells, min_share: float = 0.8):
+    """Decide how many decimals the numbers in THIS table have, using only cells
+    that parsed cleanly (flag 'ok'). Returns None if there is no clear majority:
+    then do NOT repair, just keep the cells flagged."""
+    counts = {}
+    for raw in raw_cells:
+        r = parse_cell(raw)
+        if r["kind"] == "number" and r["flag"] == "ok":
+            counts[r["decimals"]] = counts.get(r["decimals"], 0) + 1
+    if not counts:
+        return None
+    best, n = max(counts.items(), key=lambda kv: kv[1])
+    return best if n / sum(counts.values()) >= min_share else None
+
+
+def resolve_table(raw_cells, min_share: float = 0.8):
+    """Parse all value cells of ONE table together.
+    1. parse each cell
+    2. vote how many decimals this table uses ('ok' cells, plus 'ambiguous_separator'
+       cells, which look like integers with a thousands separator, e.g. '59,333')
+    3. repair UNPARSED cells with the voted decimals
+    4. if the table uses 0 or 2 decimals, '59,333' cannot be a 3-decimal number,
+       so ambiguous cells are confirmed as thousands ('ok_by_table')"""
+    parsed = [parse_cell(r) for r in raw_cells]
+    counts = {}
+    for p in parsed:
+        if p["kind"] == "number" and p["flag"] in ("ok", "ambiguous_separator"):
+            d = p.get("decimals", 0)
+            counts[d] = counts.get(d, 0) + 1
+    decimals = None
+    if counts:
+        best, n = max(counts.items(), key=lambda kv: kv[1])
+        if n / sum(counts.values()) >= min_share:
+            decimals = best
+    out = []
+    for raw, p in zip(raw_cells, parsed):
+        if p["value"] == "UNPARSED" and decimals is not None:
+            p = repair_with_table_format(raw, decimals)
+        elif p["flag"] == "ambiguous_separator" and decimals in (0, 2):
+            p = {**p, "flag": "ok_by_table"}
+        elif (p["kind"] == "number" and p["flag"] == "ok" and decimals is not None
+              and p.get("decimals", 0) != decimals):
+            # e.g. "40.823.137" in a 2-decimal table: separators are noise (ch. 42)
+            p = {**p, "flag": "format_mismatch"}
+        out.append(p)
+    return out, decimals

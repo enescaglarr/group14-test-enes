@@ -15,3 +15,6 @@ predictions*/
 ranking.json
 
 .DS_Store
+
+# External evaluation sets (FinTabNet etc.), never committed
+data/ext/
