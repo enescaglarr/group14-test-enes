@@ -6,6 +6,8 @@ estimation only), 5 (blur, via upscaling), 7-11 (line detection + router).
 import cv2
 import numpy as np
 
+from .ablation import off
+
 
 def load_gray(path):
     img = cv2.imread(str(path), cv2.IMREAD_COLOR)
@@ -245,16 +247,20 @@ def long_vlines(xs, vprof, height):
 
 
 def preprocess(path):
-    gray = crop_dark_frame(load_gray(path))
+    nopre = off("preprocess")             # ablation: no crop / upscale / deskew / shear
+    gray = load_gray(path) if nopre else crop_dark_frame(load_gray(path))
     # upscale small text: Tesseract works best around 25-35 px text height
     bw0 = binarize(gray)
     info = {}
     th0 = cross_checked_height(gray, bw0, info)
     # triage (tier guess) from cheap signals of the original image
     from . import triage
-    tri = triage.features(gray, bw0, th0, info.get("ocr_conf"), estimate_skew)
-    tier = triage.predict(tri)
-    scale = float(np.clip(30.0 / th0, 1.0, 3.0))
+    if off("triage"):
+        tri, tier = None, None            # ablation: no triage -> full path for every table
+    else:
+        tri = triage.features(gray, bw0, th0, info.get("ocr_conf"), estimate_skew)
+        tier = triage.predict(tri)
+    scale = 1.0 if nopre else float(np.clip(30.0 / th0, 1.0, 3.0))
     if scale > 1.05:
         gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
     bw = binarize(gray)
@@ -262,11 +268,11 @@ def preprocess(path):
     expected = float(np.clip(th0 * (scale if scale > 1.05 else 1.0), TH_MIN, TH_MAX))
     if not (expected / 1.5 <= th <= expected * 1.5):
         th = expected          # re-estimate after upscaling disagrees: trust the cross-checked one
-    angle = estimate_skew(bw, th)
+    angle = 0.0 if nopre else estimate_skew(bw, th)
     if abs(angle) > 0.1:
         gray = rotate(gray, angle)
         bw = binarize(gray)
-    sh = estimate_shear(bw, th)
+    sh = 0.0 if nopre else estimate_shear(bw, th)
     if abs(sh) > 0.15:
         gray = shear(gray, sh)
         bw = binarize(gray)

@@ -39,7 +39,8 @@ def _third_reader(pre, path_kind):
     Bordered bboxes are already inset from the lines; borderless ones are word
     boxes and get the same margin as the phrase re-read."""
     from . import rec_onnx
-    if not rec_onnx.available():
+    from .ablation import off
+    if off("third") or not rec_onnx.available():
         return None
     gray, th = pre["gray"], pre["th"]
     H, W = gray.shape
