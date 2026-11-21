@@ -37,3 +37,17 @@ Timing: 8-core laptop, one process, one table at a time, Python 3.12, Tesseract 
 - Source: Hugging Face `monkt/paddleocr-onnx`, revision `7b02d0a30a07ba2b92ad1ff5a8941ae2c633de65`, path `languages/latin/`; converted from PaddlePaddle PP-OCRv5 (github.com/PaddlePaddle/PaddleOCR).
 - License: **Apache License 2.0** (model card of the source repo and PaddleOCR). Apache-2.0 allows use, modification and redistribution; keep the license notice (SOURCE_README.md is kept next to the weights).
 - Runtime: onnxruntime 1.32.0 (CPU), ~50 ms per cell; input height 48 (the config.json says 32, the graph wants 48), CTC decoding over blank + 502 dict chars + space.
+
+## D: Docker dry run (not a submission)
+
+`submission_template/Dockerfile.tableparser` (the official template `Dockerfile` is unchanged): `python:3.12-slim`, Debian `tesseract-ocr` + `deu` + `eng`, pinned pip packages (numpy 2.5.5, opencv-python-headless 5.1.0.95, pytesseract 0.3.13, onnxruntime 1.32.0, pillow 13.0.0), code + all weights (`models/`) copied into the image, entrypoint = `submission_template/tableparser_adapter.py /data/images /data/predictions`.
+
+| Run (data/dev, 24 tables, `--network none`) | Total | mean s/table | max s/table | dev FINAL | Image |
+|---|---|---|---|---|---|
+| arm64, first try | 189 s | 7.8 | **15.4** (table_003) | 0.9685 | 732 MB |
+| arm64, `OMP_THREAD_LIMIT=1` (now in the Dockerfile) | 89 s | 3.7 | 6.5 (table_007) | **0.9723** | 732 MB |
+| linux/amd64 (QEMU emulation, 2-table smoke test) | -- | 9.4 | 12.3 | output identical to arm64 | 836 MB |
+
+- Build: 55 s (arm64), 79 s (amd64). Docker Desktop: 8 CPUs, 4 GB RAM.
+- Problem found: first run exceeded 15 s on one table. Cause: Debian's Tesseract is built with OpenMP and the pipeline runs up to 8 OCR calls in parallel -> CPU oversubscription. Fix tried: `OMP_THREAD_LIMIT=1` -> mean 7.8 -> 3.7 s, max 15.4 -> 6.5 s, and no table hits the time budget any more (score 0.9685 -> 0.9723).
+- amd64 timings come from emulation and say nothing about the scoring machine (16 CPUs, native amd64); they only show that the image builds and runs on that platform.
