@@ -7,6 +7,8 @@ import cv2
 import numpy as np
 import pytesseract
 
+from . import budget
+
 LANG = "deu+eng"
 
 
@@ -135,11 +137,14 @@ def ocr_line(crop_gray, th):
         return {"text": dash, "conf": 90.0, "alt": None}
     img = _prep(crop_gray, th, 32)
     text, conf = _tess(img, 7)
-    if not text or conf < 60:
+    late = budget.expired()                 # over the table budget: first read only
+    if late:
+        budget.skip()
+    if (not text or conf < 60) and not late:
         t2, c2 = _tess(img, 13)
         if t2 and (not text or c2 > conf):
             text, conf = t2, c2
-    if not _looks_numeric(text) and (conf < 75 or len(text.replace(" ", "")) <= 4):
+    if not late and not _looks_numeric(text) and (conf < 75 or len(text.replace(" ", "")) <= 4):
         # short words / markers (n/a, Apr, Min) are fragile: retry at another scale
         for target, psm in ((42, 7), (42, 8), (26, 7)):
             t4, c4 = _tess(_prep(crop_gray, th, target), psm)
@@ -160,7 +165,7 @@ def ocr_line(crop_gray, th):
         if text[-1:] in "-−" and not _is_bar(bl[-1] if bl else None):
             text, sign_doubt = text[:-1].rstrip(), True
     alt = None
-    if _looks_numeric(text):
+    if _looks_numeric(text) and not late and not budget.expired():
         # second, independent read restricted to number characters
         # different scale + restricted alphabet = different failure modes
         t3, c3 = _tess(_prep(crop_gray, th, 42), 7, NUM_WHITELIST.replace(" ", ""))

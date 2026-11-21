@@ -8,3 +8,4 @@
 | 1a text_height | 0.9486 | 0.9361 | 0.9424 +0.0015 | 0.366 / 0.442 | 5.02 | 12.3 | ACCEPT | fused-letter blobs + clamp 12-80 px + Tesseract word-height cross-check; FTN-deg 0.201->0.442, worst 27.8->12.3 s |
 | 1b router >=40% vline | 0.9486 | 0.9361 | 0.9424 +0.0000 | 0.366 / 0.442 | 3.52 | 8.3 | ACCEPT | scores identical on all 4 sets (1a already removed the false vlines); time change = machine-load noise (mean 5.0 -> 3.5 s with same code paths) |
 | 1c bordered->borderless fallback | 0.9486 | 0.9361 | 0.9424 +0.0000 | 0.366 / 0.442 | 3.38 | 8.4 | ACCEPT | never triggered on these 300 tables after 1a/1b (safety net only); scores identical |
+| 1d 12 s budget guard | 0.9486 | 0.9361 | 0.9424 +0.0000 | 0.366 / 0.442 | 3.37 | 8.3 | ACCEPT | no table reached the 12 s budget here (max 8.3 s), scores identical; adapter logs s/table + max |

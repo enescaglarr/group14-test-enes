@@ -22,6 +22,7 @@ body cell); this module rebuilds the grid from it:
 import json
 import re
 import sys
+import time
 import traceback
 from pathlib import Path
 
@@ -76,9 +77,11 @@ def to_cells(t: dict) -> list:
 def main(inp, out):
     inp, out = Path(inp), Path(out)
     out.mkdir(parents=True, exist_ok=True)
+    times = {}
     for img in sorted(inp.iterdir()):
         if img.suffix.lower() not in (".png", ".jpg", ".jpeg"):
             continue
+        t0 = time.monotonic()
         try:
             cells = to_cells(parse_table(str(img)))
         except Exception:
@@ -86,7 +89,12 @@ def main(inp, out):
             cells = [{"text": "", "r": 0, "c": 0}]   # valid file beats a missing one
         (out / f"{img.stem}.json").write_text(
             json.dumps(cells, ensure_ascii=False), encoding="utf-8")
-        print(img.stem, "done", flush=True)
+        times[img.stem] = time.monotonic() - t0
+        print(f"{img.stem} done {times[img.stem]:.1f}s", flush=True)
+    if times:
+        worst = max(times, key=times.get)
+        print(f"{len(times)} tables, mean {sum(times.values()) / len(times):.1f}s, "
+              f"max {times[worst]:.1f}s ({worst})", flush=True)
 
 
 if __name__ == "__main__":

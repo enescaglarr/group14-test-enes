@@ -11,6 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 import cv2
 import numpy as np
 
+from . import budget
 from .assemble import is_real_number
 from .ocr import despeckle, normalize_light, ocr_line, ocr_words
 from .preprocess import remove_specks
@@ -358,6 +359,9 @@ def _reread(cells, pre):
 
     def run(c):
         if (not c.get("text") and not c.get("force")) or c.get("dash") or "bbox" not in c:
+            return
+        if budget.expired():               # over the table budget: keep the page read
+            budget.skip()
             return
         x0, y0, x1, y1 = c["bbox"]
         crop = gray[max(0, int(y0 - m)):min(H, int(y1 + m)), max(0, int(x0 - m)):min(W, int(x1 + m))]
