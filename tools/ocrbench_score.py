@@ -104,7 +104,9 @@ def to_markdown(cells):
 
 def build(root, run_dir, system, variant, out):
     run_dir = Path(run_dir)
-    runs = json.loads((run_dir / "_runs.json").read_text())
+    runs = {}
+    for f in sorted(run_dir.glob("_runs*.json")):      # _runs.json or parallel shards _runs.sI.json
+        runs.update(json.loads(f.read_text()))
     res = []
     for x in subset(root):
         sid = str(x["id"])

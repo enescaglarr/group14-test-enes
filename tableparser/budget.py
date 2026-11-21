@@ -7,8 +7,19 @@ in time instead of timing out with nothing.
 
 Triage (tableparser/triage.py) then picks the path: T0/T1 (clean scans) take
 the fast path with a 4 s budget, T2/T3 (photos, faxes) the full path with 12 s.
+
+TABLEPARSER_TIME_SCALE (measurement only, default 1) stretches every budget by
+that factor: with N processes sharing the CPUs, a table gets about the same
+amount of work done as in a single-process run. The submission never sets it.
 """
+import os
 import time
+
+_SCALE = float(os.environ.get("TABLEPARSER_TIME_SCALE", "1") or 1)
+
+
+def _clock():
+    return time.monotonic() / _SCALE
 
 TABLE_BUDGET_S = 12.0
 FAST_BUDGET_S = 4.0
@@ -20,7 +31,7 @@ _skipped = 0
 
 def start(seconds: float = TABLE_BUDGET_S):
     global _start, _deadline, _skipped, _fast
-    _start = time.monotonic()
+    _start = _clock()
     _deadline = _start + seconds
     _skipped = 0
     _fast = False
@@ -39,7 +50,7 @@ def fast() -> bool:
 
 
 def expired() -> bool:
-    return _deadline is not None and time.monotonic() > _deadline
+    return _deadline is not None and _clock() > _deadline
 
 
 def skip():
