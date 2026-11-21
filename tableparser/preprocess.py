@@ -41,23 +41,60 @@ def remove_specks(bw, min_area):
     return np.where(keep[labels], 255, 0).astype(np.uint8)
 
 
-def text_height(bw):
-    """Median height of character-sized blobs = typical text height in px."""
+TH_MIN, TH_MAX = 12.0, 80.0
+
+
+def text_height(bw, clamp=True):
+    """Typical text height in px from ink blobs.
+
+    Single characters AND merged letter blobs (blur / bold fuse letters into
+    word blobs) are used: a fused word still has the text's height, while
+    dropping it leaves mostly specks and dots, which made blurred scans read
+    as ~9 px text. Clamped to [TH_MIN, TH_MAX]."""
     n, _, stats, _ = cv2.connectedComponentsWithStats(bw, 8)
     hs = stats[1:, cv2.CC_STAT_HEIGHT]
     ws = stats[1:, cv2.CC_STAT_WIDTH]
     areas = stats[1:, cv2.CC_STAT_AREA]
-    ok = (hs >= 6) & (hs <= 120) & (ws <= 3 * hs) & (ws >= 2) & (areas >= 15)
+    # ws <= 15*hs keeps fused words but drops table lines / underlines
+    ok = (hs >= 6) & (hs <= 120) & (ws <= 15 * hs) & (ws >= 2) & (areas >= 15)
     if ok.sum() < 10:
-        return 20.0
-    h = hs[ok]
-    # fax specks are many and small: characters are the upper half of the blobs.
-    # Digits/capitals share one height, so take the mode of the upper half.
-    upper = h[h >= np.percentile(h, 50)]
-    vals, counts = np.unique(upper, return_counts=True)
-    # smooth the histogram a little (heights jitter by +-1 px)
-    sm = np.convolve(counts, [1, 1, 1], mode="same")
-    return float(vals[int(np.argmax(sm))])
+        th = 20.0
+    else:
+        h = hs[ok]
+        # fax specks are many and small: characters are the upper half of the blobs.
+        # Digits/capitals share one height, so take the mode of the upper half.
+        upper = h[h >= np.percentile(h, 50)]
+        vals, counts = np.unique(upper, return_counts=True)
+        # smooth the histogram a little (heights jitter by +-1 px)
+        sm = np.convolve(counts, [1, 1, 1], mode="same")
+        th = float(vals[int(np.argmax(sm))])
+    return float(np.clip(th, TH_MIN, TH_MAX)) if clamp else th
+
+
+def tesseract_word_height(gray):
+    """Median height of confident Tesseract word boxes (None if too few).
+    Independent of specks/dots: those are not returned as words."""
+    import pytesseract
+    h, w = gray.shape
+    s = 1.0
+    if max(h, w) > 1600:                      # keep the cross-check cheap
+        s = 1600.0 / max(h, w)
+        gray = cv2.resize(gray, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+    d = pytesseract.image_to_data(gray, lang="eng", config="--psm 11",
+                                  output_type=pytesseract.Output.DICT)
+    hs = [d["height"][i] / s for i, t in enumerate(d["text"])
+          if t.strip() and float(d["conf"][i]) >= 60 and sum(ch.isalnum() for ch in t) >= 2]
+    return float(np.median(hs)) if len(hs) >= 5 else None
+
+
+def cross_checked_height(gray, bw):
+    """Blob estimate, overruled by Tesseract's word-box median when the two
+    disagree by more than 1.5x (blob statistics are fooled by specks / dots)."""
+    th = text_height(bw)
+    tw = tesseract_word_height(gray)
+    if tw is not None and not (th / 1.5 <= tw <= th * 1.5):
+        th = float(np.clip(tw, TH_MIN, TH_MAX))
+    return th
 
 
 def estimate_skew(bw, th):
@@ -175,12 +212,15 @@ def preprocess(path):
     gray = crop_dark_frame(load_gray(path))
     # upscale small text: Tesseract works best around 25-35 px text height
     bw0 = binarize(gray)
-    th0 = text_height(bw0)
+    th0 = cross_checked_height(gray, bw0)
     scale = float(np.clip(30.0 / th0, 1.0, 3.0))
     if scale > 1.05:
         gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
     bw = binarize(gray)
     th = text_height(bw)
+    expected = float(np.clip(th0 * (scale if scale > 1.05 else 1.0), TH_MIN, TH_MAX))
+    if not (expected / 1.5 <= th <= expected * 1.5):
+        th = expected          # re-estimate after upscaling disagrees: trust the cross-checked one
     angle = estimate_skew(bw, th)
     if abs(angle) > 0.1:
         gray = rotate(gray, angle)
