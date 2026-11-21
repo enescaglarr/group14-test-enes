@@ -9,8 +9,10 @@ Triage (tableparser/triage.py) then picks the path: T0/T1 (clean scans) take
 the fast path with a 4 s budget, T2/T3 (photos, faxes) the full path with 12 s.
 
 Large tables (more than LARGE_CELLS grid cells) read every cell once: no second
-reader, no retries, no per-phrase re-reads. After HARD_S seconds in total the
-remaining cells are not read at all, so a huge table still ends near 12 s.
+reader, no retries, no per-phrase re-reads. For large tables only, after HARD_S
+seconds in total the remaining cells are not read at all, so a huge table still ends
+near 12 s. Normal tables are always read to the end: the official limit is a total
+(5 min + 15 s per table), and on a slow machine cutting them costs more than it saves.
 
 TABLEPARSER_TIME_SCALE (measurement only, default 1) stretches every budget by
 that factor: with N processes sharing the CPUs, a table gets about the same
@@ -58,7 +60,8 @@ def large() -> bool:
 
 
 def hard_expired() -> bool:
-    return _start is not None and _clock() > _start + HARD_S
+    """Only large tables have a hard limit (see the module docstring)."""
+    return _large and _start is not None and _clock() > _start + HARD_S
 
 
 def set_path(fast: bool):
