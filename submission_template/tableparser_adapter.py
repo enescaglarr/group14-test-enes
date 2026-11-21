@@ -17,7 +17,9 @@ body cell); this module rebuilds the grid from it:
     ("label", "colN") become empty text
   * body: label in column 0, each value at col_index[0]+1 with cs=len(col_index);
     any grid position not covered gets an empty cell (README: write every cell)
-  * text is tableparser's "raw" string (as printed), not the parsed value
+  * text is tableparser's "raw" string (as printed), not the parsed value --
+    except for cells tableparser rebuilt in the table's own number format
+    ("repaired_raw": junk characters / broken separators from OCR)
 """
 import json
 import re
@@ -64,7 +66,8 @@ def to_cells(t: dict) -> list:
     for cell in t["cells"]:
         ci = cell["col_index"]
         r = H + cell["row_index"]
-        out.append({"text": cell.get("raw") or "", "r": r, "c": ci[0] + 1,
+        text = cell.get("repaired_raw") or cell.get("raw") or ""
+        out.append({"text": text, "r": r, "c": ci[0] + 1,
                     "rs": 1, "cs": len(ci)})
         filled.update((r, k + 1) for k in ci)
     for i in range(len(t["rows"])):

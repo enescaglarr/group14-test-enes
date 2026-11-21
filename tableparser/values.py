@@ -105,6 +105,77 @@ def table_decimals_vote(raw_cells, min_share: float = 0.8):
     return best if n / sum(counts.values()) >= min_share else None
 
 
+CLEAN_FLAGS = ("ok", "ok_by_table", "digit_fixed")
+_ALLOWED = re.compile(r"[\d.,() \-−]*")
+
+
+def _number_part(raw):
+    s = raw.replace("−", "-").replace(" ", " ").replace(" ", " ").strip()
+    s, unit = split_unit(s)
+    return s.strip(), unit
+
+
+def _shape(raw, decimals):
+    """(thousands_sep, decimal_sep) as printed in a cleanly parsed number.
+    thousands_sep is None when the integer part is too short to tell."""
+    s, _ = _number_part(raw)
+    s = s.strip("()-").strip()
+    dec_sep = None
+    if decimals:
+        dec_sep, s = s[-decimals - 1], s[:-decimals - 1]
+    digits = re.sub(r"\D", "", s)
+    if len(digits) < 4:
+        return None, dec_sep
+    seps = set(re.sub(r"\d", "", s))
+    return (seps.pop() if len(seps) == 1 else ("" if not seps else "?")), dec_sep
+
+
+def _vote(values, min_share):
+    vals = [v for v in values if v is not None]
+    if not vals:
+        return None, False
+    best = max(set(vals), key=vals.count)
+    return best, vals.count(best) / len(vals) >= min_share
+
+
+def _rebuild(raw, decimals, thou, dec_sep):
+    """Rebuild a number in the table's format from its digits alone."""
+    s, unit = _number_part(raw)
+    digits = re.sub(r"\D", "", s)
+    if len(digits) <= decimals:
+        return None
+    int_d, dec_d = (digits[:-decimals], digits[-decimals:]) if decimals else (digits, "")
+    int_d = int_d.lstrip("0") or "0"
+    if thou:
+        groups = []
+        while len(int_d) > 3:
+            groups.insert(0, int_d[-3:])
+            int_d = int_d[:-3]
+        int_d = thou.join([int_d] + groups)
+    text = int_d + (dec_sep + dec_d if decimals else "")
+    if "(" in s or ")" in s:
+        text = f"({text})"
+    elif s.startswith("-"):
+        text = "-" + text
+    elif s.endswith("-"):
+        text = text + "-"
+    if unit:
+        text += " " + UNIT_FIXES.get(unit, unit)
+    return text
+
+
+def _needs_repair(raw, p, thou, dec_sep):
+    if p["kind"] != "number":
+        return False
+    if p["flag"] not in CLEAN_FLAGS:
+        return True                                  # format mismatch / unparsed / sign
+    s, unit = _number_part(raw)
+    if not _ALLOWED.fullmatch(s):
+        return True                                  # junk characters (: ; ' ° ‚ ...)
+    t, d = _shape(raw, p.get("decimals", 0))
+    return (t is not None and t != thou) or (d is not None and d != dec_sep)
+
+
 def resolve_table(raw_cells, min_share: float = 0.8):
     """Parse all value cells of ONE table together.
     1. parse each cell
@@ -135,4 +206,26 @@ def resolve_table(raw_cells, min_share: float = 0.8):
             # e.g. "40.823.137" in a 2-decimal table: separators are noise (ch. 42)
             p = {**p, "flag": "format_mismatch"}
         out.append(p)
+
+    # clear vote -> rebuild every number cell that breaks the table's format or
+    # carries junk characters from its digits alone ('repaired', ch. 41-42)
+    if decimals is not None:
+        shapes = [_shape(r, p.get("decimals", 0)) for r, p in zip(raw_cells, out)
+                  if p["kind"] == "number" and p["flag"] in CLEAN_FLAGS
+                  and p.get("decimals", 0) == decimals]
+        # "42.074.03": same char as thousands and decimal separator = misread, no vote
+        shapes = [s for s in shapes if s[0] is None or s[1] is None or s[0] != s[1]]
+        thou, thou_ok = _vote([s[0] for s in shapes], min_share)
+        dec_sep, dec_ok = _vote([s[1] for s in shapes], min_share) if decimals else (None, True)
+        if thou_ok and dec_ok and thou != "?":
+            for i, (raw, p) in enumerate(zip(raw_cells, out)):
+                if not _needs_repair(raw, p, thou, dec_sep):
+                    continue
+                text = _rebuild(raw, decimals, thou, dec_sep)
+                if text is None or text == raw.strip():
+                    continue
+                q = parse_cell(text)
+                if q["kind"] == "number" and q["value"] != "UNPARSED":
+                    out[i] = {**q, "flag": "repaired", "repaired_text": text,
+                              "orig_flag": p["flag"]}
     return out, decimals

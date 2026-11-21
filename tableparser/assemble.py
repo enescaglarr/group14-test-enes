@@ -158,7 +158,7 @@ def assemble(cells, R, C, meta=None):
                         rec["raw"] = alt["text"]
                 elif pa["kind"] == "number" and pa["value"] not in ("UNPARSED", p["value"]):
                     clean = ("ok", "ok_by_table", "digit_fixed")
-                    if p["flag"] not in clean and pa["flag"] in clean:
+                    if p.get("orig_flag", p["flag"]) not in clean and pa["flag"] in clean:
                         # second read is clean, first needed repair -> trust the clean one
                         rec["alt_value"], p = p["value"], pa
                         rec["raw"] = alt["text"]
@@ -166,6 +166,9 @@ def assemble(cells, R, C, meta=None):
                     else:
                         flags.append("readers_disagree")
                         rec["alt_value"] = pa["value"]
+            if p.get("repaired_text") and rec["raw"] == c["text"]:
+                # rebuilt from digits in the table's format; raw stays the OCR read
+                rec["repaired_raw"] = p["repaired_text"]
             if c.get("sign_doubt"):
                 flags.append("check_sign")
             if c.get("na_guess"):
