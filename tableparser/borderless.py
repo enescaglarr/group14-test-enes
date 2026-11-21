@@ -122,14 +122,20 @@ def _phrases(row, th):
     gap must be small relative to text height, and two complete numbers never join."""
     row = sorted(row, key=lambda w: w["x0"])
     out = []
-    for w in row:
+    for j, w in enumerate(row):
         if out:
             p = out[-1]
             gap = w["x0"] - p["x1"]
             unit = UNIT_WORD.match(w["text"]) and gap < 1.0 * th
+            if unit and w["text"] in ("$", "€", "£") and j + 1 < len(row) \
+                    and NUM_START.match(row[j + 1]["text"]):
+                unit = False             # "0.8 $ 500.0": that $ belongs to 500.0
             small = gap < 0.85 * th      # measured: inside phrases <=0.7, columns >=1.07
             two_numbers = COMPLETE_NUM_END.search(p["text"]) and NUM_START.match(w["text"])
-            if (small and not two_numbers) or unit:
+            # a lone currency sign before a number belongs to it, however far it is
+            # printed to the left ("$      500.0"): no column of its own
+            currency = p["text"] in ("$", "€", "£") and NUM_START.match(w["text"])
+            if (small and not two_numbers) or unit or currency:
                 p["text"] += " " + w["text"]
                 p["x1"] = max(p["x1"], w["x1"])
                 p["y0"], p["y1"] = min(p["y0"], w["y0"]), max(p["y1"], w["y1"])

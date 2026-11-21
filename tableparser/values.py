@@ -2,8 +2,17 @@ import re
 
 NA = {"n/a", "na", "-", "–", "—", ""}
 
-KNOWN_UNITS = {"%", "€", "$", "EUR", "USD", "kg", "ms", "g", "t", "m", "km", "h", "s"}
+KNOWN_UNITS = {"%", "€", "$", "£", "EUR", "USD", "kg", "ms", "g", "t", "m", "km", "h", "s"}
 UNIT_FIXES = {"rns": "ms", "m5": "ms", "rn5": "ms", "k9": "kg", "kq": "kg", "Kg": "kg", "o/o": "%"}
+
+CUR_PREFIX = re.compile(r"([$€£])\s*(.*\d.*)")
+
+
+def _cur_prefix(raw: str):
+    """'$ 500.0' -> '$' (a currency sign printed before the number), else None."""
+    m = CUR_PREFIX.fullmatch((raw or "").strip())
+    return m.group(1) if m else None
+
 
 def split_unit(s: str):
     m = re.fullmatch(r"(.*?[\d)])\s*(%|€|\$|[A-Za-z]{1,4})", s.strip())
@@ -37,7 +46,13 @@ def parse_cell(raw: str):
     if not re.search(r"[0-9A-Za-z€$%]", s):
         # only specks / punctuation in an otherwise blank cell, e.g. "." or "·:"
         return {"kind": "empty", "value": None, "unit": None, "flag": "noise_only"}
+    prefix = None
+    m0 = CUR_PREFIX.fullmatch(s)
+    if m0:                                 # "$ 500.0": the currency is the unit
+        prefix, s = m0.group(1), m0.group(2).strip()
     s, unit = split_unit(s)
+    if unit is None and prefix:
+        unit = prefix
     unit_flag = None
     if unit is None:
         # OCR-damaged unit like "m5" or "rns": number first, then a short junk suffix
@@ -113,8 +128,12 @@ _ALLOWED = re.compile(r"[\d.,() \-−]*")
 
 def _number_part(raw):
     s = raw.replace("−", "-").replace(" ", " ").replace(" ", " ").strip()
+    prefix = None
+    m0 = CUR_PREFIX.fullmatch(s)
+    if m0:
+        prefix, s = m0.group(1), m0.group(2).strip()
     s, unit = split_unit(s)
-    return s.strip(), unit
+    return s.strip(), unit or prefix
 
 
 def _shape(raw, decimals):
@@ -161,7 +180,10 @@ def _rebuild(raw, decimals, thou, dec_sep):
         text = "-" + text
     elif s.endswith("-"):
         text = text + "-"
-    if unit:
+    prefix = _cur_prefix(raw)
+    if prefix:
+        text = f"{prefix} {text}"              # keep a leading currency in front
+    elif unit:
         text += " " + UNIT_FIXES.get(unit, unit)
     return text
 
@@ -264,6 +286,8 @@ def vote_number(reads, style):
     signs = [p[1] for p in parts]
     neg = max(set(signs), key=lambda v: (signs.count(v), v == signs[0]))
     unit = parts[0][2]
+    prefix = _cur_prefix(next(r for r in reads if r))
     paren = any("(" in r or ")" in r for r in reads if r)
     raw = (f"({digits})" if paren else f"-{digits}") if neg else digits
-    return _rebuild(raw + (f" {unit}" if unit else ""), d, style["thou"], style["dec_sep"])
+    raw = f"{prefix} {raw}" if prefix else raw + (f" {unit}" if unit else "")
+    return _rebuild(raw, d, style["thou"], style["dec_sep"])
