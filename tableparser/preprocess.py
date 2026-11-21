@@ -23,8 +23,14 @@ def crop_dark_frame(gray, dark=70):
     if len(rows) == 0 or len(cols) == 0:
         return gray
     y0, y1, x0, x1 = rows[0], rows[-1] + 1, cols[0], cols[-1] + 1
-    pad = 6  # also drop the anti-aliased edge of the frame
-    return gray[min(y0 + pad, h - 1):max(y1 - pad, 1), min(x0 + pad, w - 1):max(x1 - pad, 1)]
+    pad = 6  # also drop the anti-aliased edge of the frame -- only on sides where a
+    #          frame was actually cut; trimming a frameless edge eats glyphs that
+    #          touch it (tight crops lost the first letter of every label)
+    y0 = min(y0 + pad, h - 1) if y0 > 0 else 0
+    x0 = min(x0 + pad, w - 1) if x0 > 0 else 0
+    y1 = max(y1 - pad, 1) if y1 < h else h
+    x1 = max(x1 - pad, 1) if x1 < w else w
+    return gray[y0:y1, x0:x1]
 
 
 def binarize(gray):
@@ -80,6 +86,8 @@ def tesseract_word_height(gray):
     if max(h, w) > 1600:                      # keep the cross-check cheap
         s = 1600.0 / max(h, w)
         gray = cv2.resize(gray, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
+    pad = max(8, int(0.02 * max(gray.shape)))      # white margin for edge-touching text
+    gray = cv2.copyMakeBorder(gray, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
     d = pytesseract.image_to_data(gray, lang="eng", config="--psm 11",
                                   output_type=pytesseract.Output.DICT)
     hs = [d["height"][i] / s for i, t in enumerate(d["text"])

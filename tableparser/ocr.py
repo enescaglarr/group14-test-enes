@@ -29,7 +29,8 @@ def _prep(crop, th, target=32):
         crop = cv2.resize(crop, None, fx=s, fy=s,
                           interpolation=cv2.INTER_AREA if s < 1 else cv2.INTER_CUBIC)
     norm = normalize_light(crop, target)
-    return cv2.copyMakeBorder(norm, 15, 15, 15, 15, cv2.BORDER_CONSTANT, value=255)
+    pad = max(15, int(np.ceil(0.5 * target)))      # white margin >= 0.5 x text height
+    return cv2.copyMakeBorder(norm, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
 
 
 def ink_mask(gray):
@@ -183,6 +184,10 @@ def ocr_words(gray, th):
         img = cv2.resize(gray, None, fx=s, fy=s, interpolation=cv2.INTER_CUBIC)
     else:
         s = 1.0                      # not resized -> coordinates must not be rescaled
+    # white margin >= 0.5 x text height: glyphs touching the image edge (tight
+    # crops) otherwise lose their first/last character
+    pad = int(np.ceil(0.5 * th * s))
+    img = cv2.copyMakeBorder(img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255)
     words = []
     seen = set()
     for psm in ("11", "6"):
@@ -192,7 +197,7 @@ def ocr_words(gray, th):
             t = t.strip()
             if not t:
                 continue
-            x0, y0 = d["left"][i] / s, d["top"][i] / s
+            x0, y0 = (d["left"][i] - pad) / s, (d["top"][i] - pad) / s
             x1, y1 = x0 + d["width"][i] / s, y0 + d["height"][i] / s
             key = (round(x0 / 6), round(y0 / 6), t)
             if key in seen:
