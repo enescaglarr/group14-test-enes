@@ -8,9 +8,7 @@ import numpy as np
 import pytesseract
 
 from . import budget
-from .ablation import off, on
-
-PADDLE_MIN_CONF = 90.0     # V6 (paddle_primary): below this, fall back to Tesseract
+from .ablation import off
 
 LANG = "deu+eng"
 
@@ -145,28 +143,20 @@ def ocr_line(crop_gray, th):
     if dash:
         return {"text": dash, "conf": 90.0, "alt": None}
     img = _prep(crop_gray, th, 32)
-    paddle = _paddle_read(crop_gray, th) if on("paddle_primary") else None
-    primary_paddle = bool(paddle and paddle[0] and paddle[1] >= PADDLE_MIN_CONF)
-    if primary_paddle:                      # V6: PaddleOCR is the reader, Tesseract the referee
-        text, conf = paddle
-        late = budget.expired()
-        if late:
-            budget.skip()
-    else:
-        text, conf = _tess(img, 7)
-        late = budget.expired()                 # over the table budget: first read only
-        if late:
-            budget.skip()
-        if (not text or conf < 60) and not late:
-            t2, c2 = _tess(img, 13)
-            if t2 and (not text or c2 > conf):
-                text, conf = t2, c2
-        if not late and not _looks_numeric(text) and (conf < 75 or len(text.replace(" ", "")) <= 4):
-            # short words / markers (n/a, Apr, Min) are fragile: retry at another scale
-            for target, psm in ((42, 7), (42, 8), (26, 7)):
-                t4, c4 = _tess(_prep(crop_gray, th, target), psm)
-                if t4 and (c4 > conf + 5 or t4.lower() in ("n/a", "na")):
-                    text, conf = t4, c4
+    text, conf = _tess(img, 7)
+    late = budget.expired()                 # over the table budget: first read only
+    if late:
+        budget.skip()
+    if (not text or conf < 60) and not late:
+        t2, c2 = _tess(img, 13)
+        if t2 and (not text or c2 > conf):
+            text, conf = t2, c2
+    if not late and not _looks_numeric(text) and (conf < 75 or len(text.replace(" ", "")) <= 4):
+        # short words / markers (n/a, Apr, Min) are fragile: retry at another scale
+        for target, psm in ((42, 7), (42, 8), (26, 7)):
+            t4, c4 = _tess(_prep(crop_gray, th, target), psm)
+            if t4 and (c4 > conf + 5 or t4.lower() in ("n/a", "na")):
+                text, conf = t4, c4
     sign_doubt = False
 
     def _is_bar(b):
@@ -182,28 +172,14 @@ def ocr_line(crop_gray, th):
         if text[-1:] in "-−" and not _is_bar(bl[-1] if bl else None):
             text, sign_doubt = text[:-1].rstrip(), True
     alt = None
-    second = primary_paddle or not budget.fast() or conf < 60  # fast path: second reader only when unsure
+    second = not budget.fast() or conf < 60  # fast path: second reader only when unsure
     if _looks_numeric(text) and second and not late and not budget.expired():
         # second, independent read restricted to number characters
         # different scale + restricted alphabet = different failure modes
         t3, c3 = _tess(_prep(crop_gray, th, 42), 7, NUM_WHITELIST.replace(" ", ""))
         if t3 and t3.replace(" ", "") != text.replace(" ", ""):
             alt = {"text": t3, "conf": c3}
-    if (paddle and not primary_paddle and alt is None and paddle[0] and _looks_numeric(paddle[0])
-            and paddle[0].replace(" ", "") != text.replace(" ", "")):
-        alt = {"text": paddle[0], "conf": paddle[1]}     # V6 fallback: keep Paddle's number as opinion
     return {"text": text, "conf": conf, "alt": alt, "sign_doubt": sign_doubt}
-
-
-def _paddle_read(crop_gray, th):
-    """V6 only: PaddleOCR recognizer on the light-normalized cell crop with a white margin."""
-    from . import rec_onnx
-    if not rec_onnx.available():
-        return None
-    pad = max(4, int(0.25 * th))
-    img = cv2.copyMakeBorder(normalize_light(crop_gray, th), pad, pad, pad, pad,
-                             cv2.BORDER_CONSTANT, value=255)
-    return rec_onnx.read(img)
 
 
 def ocr_words(gray, th):
