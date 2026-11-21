@@ -141,7 +141,7 @@ def assemble(cells, R, C, meta=None, third_reader=None):
             break
         n_header += 1
     if n_header == R:          # no numbers anywhere: assume one header row
-        n_header = 1
+        n_header = 1 if R > 1 else 0          # a single row is body, never an empty table
 
     german = german_hint([c["text"] for c in cells])
 

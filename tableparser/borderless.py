@@ -193,26 +193,45 @@ def borderless_cells(pre):
     rows = [_phrases(r, th) for r in raw_rows]
     rows = [r for r in rows if r]
 
+    if not rows:
+        return [], 0, 0                             # no text on the page at all
     # body = rows holding a real number; header = text rows directly above
     is_body = [any(is_real_number(p["text"]) for p in r) for r in rows]
-    if not any(is_body):
-        return [], 0, 0
+    text_mode = not any(is_body)
+    if text_mode:
+        # no number anywhere (text tables): header = the top row(s) above the first
+        # rule, else the first row; everything below is body. Never an empty table.
+        n_head = _text_header_rows(rows, pre) if len(rows) > 1 else 0
+        is_body = [i >= n_head for i in range(len(rows))]
     first = is_body.index(True)
     last = len(is_body) - 1 - is_body[::-1].index(True)
     body = rows[first:last + 1]
     header = rows[:first][-3:]                      # at most 3 header rows
 
-    # label zone: left of every number in the body
-    nums = [p for r in body for p in r if is_real_number(p["text"])]
-    min_num_x0 = min(p["x0"] for p in nums)
-    def is_label(p):
-        return p["x1"] <= min_num_x0 + 0.2 * th and re.match(r"[A-Za-zÄÖÜäöü(]", p["text"])
-    labels = {i: next((p for p in r if is_label(p)), None) for i, r in enumerate(body)}
+    if text_mode:
+        # label = leftmost phrase of a row; the other phrases are the values
+        labels = {i: min(r, key=lambda p: p["x0"]) for i, r in enumerate(body)}
+        nums = [p for i, r in enumerate(body) for p in r if p is not labels[i]]
+        if not nums:                                # a one-column list
+            cells = [{"r0": bi, "r1": bi, "c0": 0, "c1": 0, "text": " ".join(p["text"] for p in r),
+                      "conf": min(p["conf"] for p in r), "bbox": _union(r)}
+                     for bi, r in enumerate(rows)]
+            _reread(cells, pre)
+            return cells, len(rows), 1
+        min_num_x0 = min(p["x0"] for p in nums)
+    else:
+        # label zone: left of every number in the body
+        nums = [p for r in body for p in r if is_real_number(p["text"])]
+        min_num_x0 = min(p["x0"] for p in nums)
+        def is_label(p):
+            return p["x1"] <= min_num_x0 + 0.2 * th and re.match(r"[A-Za-zÄÖÜäöü(]", p["text"])
+        labels = {i: next((p for p in r if is_label(p)), None) for i, r in enumerate(body)}
     label_right = max([p["x1"] for p in labels.values() if p] + [min_num_x0 - th])
     label_x0 = min([p["x0"] for p in labels.values() if p] + [label_right - 8 * th])
 
-    # columns from right edges of numbers (whole phrase incl. unit, ch. 27)
-    rights = [p["x1"] for p in nums]
+    # columns from right edges of numbers (whole phrase incl. unit, ch. 27);
+    # text columns are left-aligned: their left edges
+    rights = [p["x0"] if text_mode else p["x1"] for p in nums]
     hv_rows = [[p for p in r if p["x0"] > label_right - 0.2 * th] for r in header]
     header_val = max(hv_rows, key=len) if hv_rows else []
     K = len(header_val)
@@ -239,6 +258,9 @@ def borderless_cells(pre):
 
     def place_number(p):
         return int(np.argmin([abs(p["x1"] - c["right"]) for c in cols]))
+
+    def place_text(p):
+        return int(np.argmin([abs(p["x0"] - c["left"]) for c in cols]))
 
     def place_marker(p):
         """Single cell vs merged pair: whichever centre is closest (ch. 22).
@@ -319,8 +341,10 @@ def borderless_cells(pre):
         for p in r:
             if p is lab:
                 continue
-            if is_real_number(p["text"]) or (parse_cell(p["text"])["kind"] == "number"
-                                             and p["text"].lower() not in NA_WORDS):
+            if text_mode:
+                c0 = c1 = place_text(p)
+            elif is_real_number(p["text"]) or (parse_cell(p["text"])["kind"] == "number"
+                                               and p["text"].lower() not in NA_WORDS):
                 c0 = c1 = place_number(p)
             else:
                 c0, c1 = place_marker(p)
@@ -341,6 +365,19 @@ def borderless_cells(pre):
                 cells.append({"r0": R, "r1": R, "c0": k, "c1": k, "text": "", "conf": 100})
     _reread(cells, pre)
     return cells, H + len(body), K + 1
+
+
+def _text_header_rows(rows, pre, max_rows=3):
+    """Header depth of a table without numbers: the rows above the first horizontal
+    rule that has text both above and below it (at most max_rows), else 1."""
+    tops = [min(p["y0"] for p in r) for r in rows]
+    bottoms = [max(p["y1"] for p in r) for r in rows]
+    for y in sorted(pre.get("hlines", [])):
+        above = sum(b <= y for b in bottoms)
+        below = sum(t >= y for t in tops)
+        if above >= 1 and below >= 1 and above + below == len(rows):
+            return above if above <= max_rows else 1
+    return 1
 
 
 def _union(ps, bbox=None):
