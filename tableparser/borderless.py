@@ -216,6 +216,7 @@ def borderless_cells(pre):
             cells = [{"r0": bi, "r1": bi, "c0": 0, "c1": 0, "text": " ".join(p["text"] for p in r),
                       "conf": min(p["conf"] for p in r), "bbox": _union(r)}
                      for bi, r in enumerate(rows)]
+            budget.set_large(len(rows))
             _reread(cells, pre)
             return cells, len(rows), 1
         min_num_x0 = min(p["x0"] for p in nums)
@@ -363,6 +364,7 @@ def borderless_cells(pre):
         for k in range(1, K + 1):                  # blank cells (ch. 23/24)
             if k not in covered:
                 cells.append({"r0": R, "r1": R, "c0": k, "c1": k, "text": "", "conf": 100})
+    budget.set_large((H + len(body)) * (K + 1))
     _reread(cells, pre)
     return cells, H + len(body), K + 1
 
@@ -397,6 +399,8 @@ def _reread(cells, pre):
 
     def run(c):
         if (not c.get("text") and not c.get("force")) or c.get("dash") or "bbox" not in c:
+            return
+        if budget.large() and not c.get("force"):   # large table: keep the page read
             return
         if budget.expired():               # over the table budget: keep the page read
             budget.skip()

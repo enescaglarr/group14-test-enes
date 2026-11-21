@@ -135,6 +135,9 @@ def ocr_line(crop_gray, th):
     reader's answer when the two readers disagree (challenge 41-44 cross-check)."""
     if crop_gray.size == 0:
         return {"text": "", "conf": 100.0, "alt": None}
+    if budget.hard_expired():               # 12 s in total: the remaining cells stay unread
+        budget.unread()
+        return {"text": "", "conf": 0.0, "alt": None}
     if not budget.fast():                   # fast path (T0/T1 triage): no fax specks to remove
         crop_gray = despeckle(crop_gray, th)
     if not has_ink(crop_gray, th):
@@ -147,6 +150,7 @@ def ocr_line(crop_gray, th):
     late = budget.expired()                 # over the table budget: first read only
     if late:
         budget.skip()
+    late = late or budget.large()           # large table: first read only
     if (not text or conf < 60) and not late:
         t2, c2 = _tess(img, 13)
         if t2 and (not text or c2 > conf):

@@ -8,6 +8,10 @@ in time instead of timing out with nothing.
 Triage (tableparser/triage.py) then picks the path: T0/T1 (clean scans) take
 the fast path with a 4 s budget, T2/T3 (photos, faxes) the full path with 12 s.
 
+Large tables (more than LARGE_CELLS grid cells) read every cell once: no second
+reader, no retries, no per-phrase re-reads. After HARD_S seconds in total the
+remaining cells are not read at all, so a huge table still ends near 12 s.
+
 TABLEPARSER_TIME_SCALE (measurement only, default 1) stretches every budget by
 that factor: with N processes sharing the CPUs, a table gets about the same
 amount of work done as in a single-process run. The submission never sets it.
@@ -23,6 +27,10 @@ def _clock():
 
 TABLE_BUDGET_S = 12.0
 FAST_BUDGET_S = 4.0
+HARD_S = 12.0
+LARGE_CELLS = 150
+_large = False
+_unread = 0
 _start = None
 _deadline = None
 _fast = False
@@ -30,11 +38,27 @@ _skipped = 0
 
 
 def start(seconds: float = TABLE_BUDGET_S):
-    global _start, _deadline, _skipped, _fast
+    global _start, _deadline, _skipped, _fast, _large, _unread
     _start = _clock()
     _deadline = _start + seconds
     _skipped = 0
     _fast = False
+    _large = False
+    _unread = 0
+
+
+def set_large(n_cells: int):
+    """Mark the table as large (first read only) once its grid size is known."""
+    global _large
+    _large = n_cells > LARGE_CELLS
+
+
+def large() -> bool:
+    return _large
+
+
+def hard_expired() -> bool:
+    return _start is not None and _clock() > _start + HARD_S
 
 
 def set_path(fast: bool):
@@ -61,3 +85,13 @@ def skip():
 
 def skipped() -> int:
     return _skipped
+
+
+def unread():
+    """Count one cell left unread because the hard limit was reached."""
+    global _unread
+    _unread += 1
+
+
+def n_unread() -> int:
+    return _unread

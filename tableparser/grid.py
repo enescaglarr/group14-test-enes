@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import cv2
 import numpy as np
 
+from . import budget
 from .ocr import ocr_line
 
 
@@ -81,6 +82,8 @@ def bordered_cells(pre):
         x0, x1 = xs[c0] + inset, xs[c1 + 1] - inset
         y0, y1 = ys[r0] + inset, ys[r1 + 1] - inset
         jobs.append((r0, r1, c0, c1, x0, y0, x1, y1))
+
+    budget.set_large(R * C)
 
     def run(job):
         r0, r1, c0, c1, x0, y0, x1, y1 = job

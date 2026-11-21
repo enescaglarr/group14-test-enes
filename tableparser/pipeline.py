@@ -75,7 +75,8 @@ def parse_table(path):
             "tier_guess": pre.get("tier"), "fast_path": budget.fast()}
     bordered = len(pre["vlines"]) >= 3     # router (ch. 7-11): needs vertical lines
     table = _run("bordered" if bordered else "borderless", pre, meta)
-    if bordered and (len(table["rows"]) < 2 or len(table["columns"]) > MAX_PLAUSIBLE_COLS):
+    if bordered and (len(table["rows"]) < 2 or len(table["columns"]) > MAX_PLAUSIBLE_COLS) \
+            and not budget.hard_expired():
         # fallback: the line grid gave an implausible table (false vertical lines
         # from aligned glyph stems, or a grid without body rows) -> try borderless
         alt = _run("borderless", pre, meta)
@@ -87,6 +88,8 @@ def parse_table(path):
         table = chosen
     table["meta"]["seconds"] = round(time.time() - t0, 1)
     table["meta"]["budget_skipped"] = budget.skipped()
+    table["meta"]["cells_unread"] = budget.n_unread()
+    table["meta"]["large_table"] = budget.large()
     return table
 
 
