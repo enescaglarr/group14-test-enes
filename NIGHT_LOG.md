@@ -1,5 +1,18 @@
 # NIGHT_LOG
 
+## Summary (10 lines)
+
+1. Branch `night`: baseline commit 7bcc951, one commit per accepted step (1a, 1b, 1c, 1d, 2, 3, 4, B, C), the Docker dry run and this log; all 9 steps passed the rule (mean gen/holdout drop <= 0.002, max < 15 s), none reverted; nothing pushed.
+2. Final check, `data/final` (seed 123, 100 new tables): FINAL **0.9262 -> 0.9573** (+0.031), TEDS-w 0.947 -> 0.968, QA 0.810 -> 0.900, CellF1 0.844 -> 0.905.
+3. Per tier TEDS (final set): T0 0.972 -> 0.989, T1 0.986 -> 0.985, T2 0.964 -> 0.962, T3 0.908 -> 0.957.
+4. gen 0.9486 -> 0.9583, holdout 0.9333 -> 0.9538; FinTabNet TEDS clean 0.383 -> 0.459, degraded 0.201 -> 0.454 (no FinTabNet-specific tuning).
+5. Longest table: 27.8 s -> 8.2 s (all 300 eval tables) and 7.4 s on the final set; Docker (dev, offline): mean 3.7 s, max 6.5 s, image 732 MB (arm64) / 836 MB (amd64).
+6. Biggest wins: 3 number rebuild from digits (+0.0093), C third reader with digit voting (+0.0031), 1a text height (FinTabNet degraded x2.2, worst time 27.8 -> 12.3 s), 2 white margin + frame-crop fix (FTN clean +0.10).
+7. Neutral (kept as safety nets / speed): 1b router 40 %, 1c fallback, 1d 12 s budget (never triggered on these sets), 4 snap 0.8 (-0.0001), B triage (T0/T1 30 % faster, T3 -> T0 = 0 %).
+8. Remaining error 1 -- header structure in two-row headers: group-header spans wrong (31 header cells) and an extra header/body row (6 tables); 20 final tables still have a wrong grid (4 of them an extra column).
+9. Remaining error 2 -- merged body cells: '—' / 'n/a' / 'see note 3' merged vs single decided wrong (19 body cells).
+10. Remaining error 3 -- wrong digits that survive the voting (e.g. 1/4, 5/9, 6/8; 23 cells in 17 tables); value errors overall fell 229 -> 51 cells.
+
 ## Steps
 
 | Step | gen | holdout | mean (delta) | FinTabNet clean / degraded TEDS | mean s/table | max s/table | Decision | Note |
@@ -51,3 +64,30 @@ Timing: 8-core laptop, one process, one table at a time, Python 3.12, Tesseract 
 - Build: 55 s (arm64), 79 s (amd64). Docker Desktop: 8 CPUs, 4 GB RAM.
 - Problem found: first run exceeded 15 s on one table. Cause: Debian's Tesseract is built with OpenMP and the pipeline runs up to 8 OCR calls in parallel -> CPU oversubscription. Fix tried: `OMP_THREAD_LIMIT=1` -> mean 7.8 -> 3.7 s, max 15.4 -> 6.5 s, and no table hits the time budget any more (score 0.9685 -> 0.9723).
 - amd64 timings come from emulation and say nothing about the scoring machine (16 CPUs, native amd64); they only show that the image builds and runs on that platform.
+
+## E: final check on unseen data (`data/final`, seed 123, 100 tables, never used before)
+
+| | FINAL | TEDS-w | QA | CellF1 | T0 TEDS | T1 TEDS | T2 TEDS | T3 TEDS | mean s | max s |
+|---|---|---|---|---|---|---|---|---|---|---|
+| baseline (7bcc951) | 0.9262 | 0.9467 | 0.810 | 0.8436 | 0.972 | 0.986 | 0.964 | 0.908 | 3.72 | 6.5 |
+| night (049f0e1) | **0.9573** | 0.9675 | 0.900 | 0.9050 | 0.989 | 0.985 | 0.962 | 0.957 | 3.57 | 7.4 |
+
+CellF1 per tier (baseline -> night): T0 0.847 -> 0.964, T1 0.944 -> 0.954, T2 0.855 -> 0.840, T3 0.729 -> 0.862.
+
+Error cells (final set, aligned to ground truth; cells in structure-wrong tables counted as structure):
+
+| Type | baseline | night |
+|---|---|---|
+| structure (shape / span / shifted / extra) | 897 cells, 20 tables | 577 cells, 20 tables |
+| value: separator / punctuation | 99 | 2 |
+| value: format only | 62 | 6 |
+| value: wrong digits | 38 | 23 |
+| value: sign | 16 | 4 |
+| label | 14 | 11 |
+| header | 5 | 9 |
+
+Structure-wrong final tables (night): 20; 4 with an extra column, 6 with an extra row, 1 with a missing row; span errors: 31 header cells (group-header spans), 19 body cells (merged markers).
+
+Worst final tables (night): table_017 (T1 borderless, 7x4 -> 8x5), table_055 (T3 hlines, group-header spans), table_079 (T3 hlines, header depth), table_080 (T0 borderless, group-header spans), table_014 (T2 borderless, extra column), table_066 (T2 grid, merged '—' split).
+
+Notes: seeds used tonight -- 42 dev (untouched), 2026 gen, 7 holdout, 99 triage training, 15 FinTabNet selection, 123 final. Data under `data/` is gitignored (not committed).
