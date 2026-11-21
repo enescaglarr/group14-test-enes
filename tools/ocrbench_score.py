@@ -2,7 +2,7 @@
 """Build OCRBench v2 prediction files from tools/ocrbench_run.py outputs and score
 them with the OFFICIAL evaluation code (Yuliang-Liu/MultimodalOCR, OCRBench_v2/eval_scripts).
 
-    python tools/ocrbench_score.py build <OCRBench_v2 root> <run_dir> <system> <variant> <out.json>
+    python tools/ocrbench_score.py build <OCRBench_v2 root> <run_dir> <system> <variant> <out.json> [ids.json]
         system  tableparser (reads <id>.json cell lists) | tesseract (reads <id>.html)
         variant td  all cells as <td>            (main result)
                 th  header rows (r < header depth) as <th> in <thead>  (sensitivity check)
@@ -10,6 +10,8 @@ them with the OFFICIAL evaluation code (Yuliang-Liu/MultimodalOCR, OCRBench_v2/e
         Items whose question asks for Markdown get a Markdown table (the official scorer
         parses those with convert_markdown_table_to_html); all others get HTML.
         A sample without output (error / timeout) gets predict "" -> official score 0.
+        ids.json (optional): a list of sample ids; only those samples are written
+        (the fixed 100-sample subset), so the official mean is over that subset.
 
     python tools/ocrbench_score.py teds_s <eval_scripts dir> <pred.json> <out.json>
         Structure-only TEDS (TEDS-S) with the official TEDS class (structure_only=True)
@@ -102,14 +104,17 @@ def to_markdown(cells):
     return "\n".join([line(g[0]), "| " + " | ".join(["---"] * C) + " |"] + [line(r) for r in g[1:]])
 
 
-def build(root, run_dir, system, variant, out):
+def build(root, run_dir, system, variant, out, ids=None):
     run_dir = Path(run_dir)
+    keep = set(json.loads(Path(ids).read_text())) if ids else None
     runs = {}
     for f in sorted(run_dir.glob("_runs*.json")):      # _runs.json or parallel shards _runs.sI.json
         runs.update(json.loads(f.read_text()))
     res = []
     for x in subset(root):
         sid = str(x["id"])
+        if keep is not None and sid not in keep:
+            continue
         cells = None
         if runs.get(sid, {}).get("status") == "ok":
             if system == "tableparser":
@@ -162,7 +167,7 @@ def teds_s(eval_dir, pred, out):
 if __name__ == "__main__":
     cmd = sys.argv[1]
     if cmd == "build":
-        build(*sys.argv[2:7])
+        build(*sys.argv[2:8])
     elif cmd == "teds_s":
         teds_s(*sys.argv[2:5])
     else:
