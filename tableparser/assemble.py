@@ -189,6 +189,8 @@ def assemble(cells, R, C, meta=None, third_reader=None):
         else:
             p = next(by_text_idx)
             flags = [p["flag"]] if p["flag"] != "ok" else []
+            if p.get("digit_fixed") and "digit_fixed" not in flags:
+                flags.append("digit_fixed")          # repaired after mapping O->0, l->1, ...
             # second reader (ch. 41-44): use it if the first read failed, flag if they disagree
             alt = c.get("alt")
             if alt:

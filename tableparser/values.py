@@ -26,12 +26,13 @@ CONFUSABLE = str.maketrans({"O": "0", "o": "0", "D": "0", "l": "1", "I": "1", "|
                             "S": "5", "B": "8", "Z": "2"})
 
 def fix_digit_confusions(s: str):
-    """Inside number-like words only (has a digit, rest digits/separators/confusables),
+    """Inside number-like words only (has a digit, rest digits/separators/confusables;
+    OCR separator noise ; : · ' counts as a separator here),
     map OCR letter look-alikes back to digits: 'O76' -> '076'.
     Words without a digit ('note', 'ms', 'kg', 'n/a', 'Sulfur') are left alone."""
     out, changed = [], False
     for w in s.split(" "):
-        if (re.search(r"\d", w) and re.fullmatch(r"[\d.,:()\-OoDlI|SBZ]+", w)
+        if (re.search(r"\d", w) and re.fullmatch(r"[\d.,:;·'()\-OoDlI|SBZ]+", w)
                 and re.search(r"[OoDlI|SBZ]", w)):
             w, changed = w.translate(CONFUSABLE), True
         out.append(w)
@@ -100,11 +101,13 @@ def repair_with_table_format(raw: str, table_decimals: int):
     s = raw.replace("−", "-")
     s, unit = split_unit(s.strip())
     neg = s.strip().startswith(("-", "(")) or s.strip().endswith((")", "-"))
+    s, fixed = fix_digit_confusions(s)          # 'O' -> '0' before non-digits are dropped
     digits = re.sub(r"\D", "", s)
     if len(digits) <= table_decimals:
         return {"kind": "number", "value": "UNPARSED", "raw": raw, "unit": unit, "flag": "check"}
     value = int(digits) / (10 ** table_decimals)
-    return {"kind": "number", "value": -value if neg else value, "unit": unit, "flag": "repaired"}
+    return {"kind": "number", "value": -value if neg else value, "unit": unit, "flag": "repaired",
+            "digit_fixed": fixed}
 
 
 def table_decimals_vote(raw_cells, min_share: float = 0.8):
@@ -160,9 +163,10 @@ def _vote(values, min_share):
 
 
 def _rebuild(raw, decimals, thou, dec_sep):
-    """Rebuild a number in the table's format from its digits alone."""
+    """Rebuild a number in the table's format from its digits alone
+    (OCR letter look-alikes count as their digits: '1O7.00' -> 107.00)."""
     s, unit = _number_part(raw)
-    digits = re.sub(r"\D", "", s)
+    digits = re.sub(r"\D", "", fix_digit_confusions(s)[0])
     if len(digits) <= decimals:
         return None
     int_d, dec_d = (digits[:-decimals], digits[-decimals:]) if decimals else (digits, "")
@@ -254,7 +258,8 @@ def resolve_table(raw_cells, min_share: float = 0.8, with_style: bool = False):
                 q = parse_cell(text)
                 if q["kind"] == "number" and q["value"] != "UNPARSED":
                     out[i] = {**q, "flag": "repaired", "repaired_text": text,
-                              "orig_flag": p["flag"]}
+                              "orig_flag": p["flag"],
+                              "digit_fixed": fix_digit_confusions(_number_part(raw)[0])[1]}
     return (out, decimals, style) if with_style else (out, decimals)
 
 
