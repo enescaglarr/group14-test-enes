@@ -176,7 +176,7 @@ def _needs_repair(raw, p, thou, dec_sep):
     return (t is not None and t != thou) or (d is not None and d != dec_sep)
 
 
-def resolve_table(raw_cells, min_share: float = 0.8):
+def resolve_table(raw_cells, min_share: float = 0.8, with_style: bool = False):
     """Parse all value cells of ONE table together.
     1. parse each cell
     2. vote how many decimals this table uses ('ok' cells, plus 'ambiguous_separator'
@@ -209,6 +209,7 @@ def resolve_table(raw_cells, min_share: float = 0.8):
 
     # clear vote -> rebuild every number cell that breaks the table's format or
     # carries junk characters from its digits alone ('repaired', ch. 41-42)
+    style = None
     if decimals is not None:
         shapes = [_shape(r, p.get("decimals", 0)) for r, p in zip(raw_cells, out)
                   if p["kind"] == "number" and p["flag"] in CLEAN_FLAGS
@@ -218,6 +219,7 @@ def resolve_table(raw_cells, min_share: float = 0.8):
         thou, thou_ok = _vote([s[0] for s in shapes], min_share)
         dec_sep, dec_ok = _vote([s[1] for s in shapes], min_share) if decimals else (None, True)
         if thou_ok and dec_ok and thou != "?":
+            style = {"decimals": decimals, "thou": thou, "dec_sep": dec_sep}
             for i, (raw, p) in enumerate(zip(raw_cells, out)):
                 if not _needs_repair(raw, p, thou, dec_sep):
                     continue
@@ -228,4 +230,37 @@ def resolve_table(raw_cells, min_share: float = 0.8):
                 if q["kind"] == "number" and q["value"] != "UNPARSED":
                     out[i] = {**q, "flag": "repaired", "repaired_text": text,
                               "orig_flag": p["flag"]}
-    return out, decimals
+    return (out, decimals, style) if with_style else (out, decimals)
+
+
+def _digits_sign(raw):
+    s, unit = _number_part(raw)
+    neg = s.startswith(("-", "(")) or s.endswith((")", "-"))
+    return re.sub(r"\D", "", s), neg, unit
+
+
+def vote_number(reads, style):
+    """Digit-by-digit majority over several reads of one number cell (C: third
+    reader). Every read is reduced to (digits, sign) -- separators and junk do
+    not vote, the table format is applied afterwards. The first read is the
+    tie-breaker. Returns the voted text in the table's format, or None."""
+    parts = [_digits_sign(r) for r in reads if r]
+    parts = [p for p in parts if p[0]]
+    if len(parts) < 2 or style is None:
+        return None
+    d = style["decimals"]
+    lengths = [len(p[0]) for p in parts]
+    best_len = max(set(lengths), key=lambda L: (lengths.count(L), L == lengths[0]))
+    if lengths.count(best_len) < 2 or best_len <= d:
+        return None                                   # no two reads agree on the length
+    same = [p for p in parts if len(p[0]) == best_len]
+    digits = ""
+    for i in range(best_len):
+        col = [p[0][i] for p in same]
+        digits += max(set(col), key=lambda ch: (col.count(ch), ch == col[0]))
+    signs = [p[1] for p in parts]
+    neg = max(set(signs), key=lambda v: (signs.count(v), v == signs[0]))
+    unit = parts[0][2]
+    paren = any("(" in r or ")" in r for r in reads if r)
+    raw = (f"({digits})" if paren else f"-{digits}") if neg else digits
+    return _rebuild(raw + (f" {unit}" if unit else ""), d, style["thou"], style["dec_sep"])

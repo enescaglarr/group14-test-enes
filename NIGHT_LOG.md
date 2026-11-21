@@ -13,6 +13,7 @@
 | 3 rebuild numbers from digits | 0.9560 | 0.9502 | 0.9531 +0.0093 | 0.463 / 0.453 | 3.36 | 7.8 | ACCEPT | clear vote (>=80%) -> off-format / junk number cells rebuilt in the table's format ('repaired_raw', adapter writes it); QA gen 0.870->0.894, holdout 0.834->0.882 |
 | 4 snap cutoff 0.8 + umlaut only with German hint | 0.9548 | 0.9512 | 0.9530 -0.0001 | 0.463 / 0.453 | 3.38 | 7.6 | ACCEPT | neutral within the 0.002 rule (gen -0.0012, holdout +0.0010): short OCR-damaged headers (0kt) no longer snap, English labels no longer get umlauts |
 | B triage fast path (T0/T1 4 s, T2/T3 12 s) | 0.9548 | 0.9512 | 0.9530 +0.0000 | 0.459 / 0.453 | 2.96 | 7.6 | ACCEPT | depth-4 tree on specks/bg_spread/lap_var/skew, CV acc 0.955, T3->T0 0% (CV, gen, holdout); T0/T1 ~30% faster (gen 3.85->2.62 s), scores unchanged; FTN clean 0.463->0.459 |
+| C 3rd reader (PP-OCRv5 latin rec, ONNX) | 0.9583 | 0.9538 | 0.9561 +0.0031 | 0.459 / 0.454 | 3.01 | 8.2 | ACCEPT | only suspicious number cells (conf<70 / flagged / format mismatch); 3 reads -> digits+sign, digit-wise majority, printed in table format; QA gen 0.888->0.904, holdout 0.888->0.898 |
 
 ## A: before / after (baseline commit 7bcc951 -> step 4 commit)
 
@@ -28,3 +29,11 @@
 | max s/table (all 300) | 27.8 | 7.6 | -20.2 |
 
 Timing: 8-core laptop, one process, one table at a time, Python 3.12, Tesseract 5 (deu+eng, tessdata_fast); other apps running, so +-30% noise between runs.
+
+## C: third reader -- model and license
+
+- Model: PaddleOCR **PP-OCRv5 latin mobile recognition** (`latin_PP-OCRv5_mobile_rec`), recognition only (no detection), ONNX export.
+- Files: `models/paddleocr_rec_latin/` (`rec.onnx` 7.9 MB, `dict.txt`, `config.json`, `SOURCE_README.md`), committed to the repo; no network at run time.
+- Source: Hugging Face `monkt/paddleocr-onnx`, revision `7b02d0a30a07ba2b92ad1ff5a8941ae2c633de65`, path `languages/latin/`; converted from PaddlePaddle PP-OCRv5 (github.com/PaddlePaddle/PaddleOCR).
+- License: **Apache License 2.0** (model card of the source repo and PaddleOCR). Apache-2.0 allows use, modification and redistribution; keep the license notice (SOURCE_README.md is kept next to the weights).
+- Runtime: onnxruntime 1.32.0 (CPU), ~50 ms per cell; input height 48 (the config.json says 32, the graph wants 48), CTC decoding over blank + 502 dict chars + space.

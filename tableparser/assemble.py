@@ -8,7 +8,8 @@ Challenges: 13-19 (header rows/paths), 23/24 (blank cells as records),
 import difflib
 import re
 
-from .values import parse_cell, resolve_table
+from . import budget
+from .values import parse_cell, resolve_table, vote_number
 
 YEAR = re.compile(r"^(19|20)\d{2}$")
 PERIOD = re.compile(r"^(Q[1-4]|FY|H[12]|Jan|Feb|M[aä]r|Apr|Ma[iy]|Jun|Jul|Aug|Sep|O[ck]t|Nov|De[cz])\.?$", re.I)
@@ -121,8 +122,11 @@ def _drop_empty(cells, R, C):
     return out, len(rmap), len(cmap)
 
 
-def assemble(cells, R, C, meta=None):
+def assemble(cells, R, C, meta=None, third_reader=None):
+    """third_reader(bbox) -> (text, conf): optional extra reader for suspicious
+    number cells (bbox in the preprocessed page's coordinates)."""
     cells, R, C = _drop_empty(cells, R, C)
+    third = []
     at = {}
     for i, c in enumerate(cells):
         for r in range(c["r0"], c["r1"] + 1):
@@ -170,7 +174,7 @@ def assemble(cells, R, C, meta=None):
         if cells[i]["text"].lower() != "n/a" and NA_GUESS.match(cells[i]["text"]):   # "Wa", "oma" (ch. 23)
             cells[i]["na_guess"], cells[i]["text"] = True, "n/a"
     texts = [cells[i]["text"] for i in value_cells if cells[i]["text"]]
-    parsed, decimals = resolve_table(texts) if texts else ([], None)
+    parsed, decimals, style = resolve_table(texts, with_style=True) if texts else ([], None, None)
     by_text_idx = iter(parsed)
 
     records = []
@@ -214,15 +218,42 @@ def assemble(cells, R, C, meta=None):
                 flags.append("low_ocr_confidence")
             rec.update({"kind": p["kind"], "value": p["value"], "unit": p.get("unit"),
                         "flags": flags})
+            suspicious = p["kind"] == "number" and (
+                c.get("conf", 100) < 70
+                or [f for f in flags if f not in ("ok_by_table", "digit_fixed")])
+            if suspicious and third_reader is not None and style is not None and c.get("bbox"):
+                third.append((rec, c))
             if p["kind"] == "text":
                 rec["text"] = p.get("text", c["text"])
         if len(rec["cols"]) > 1:
             rec["merged"] = True
         records.append(rec)
 
+    # third reader (C): only on suspicious number cells -- low confidence, flagged
+    # or format mismatch. Three reads (first, second reader, ONNX recognizer) are
+    # reduced to digits + sign and voted digit by digit, then printed in the
+    # table's own number format.
+    n_third = 0
+    for rec, c in third:
+        if budget.expired():
+            budget.skip()
+            break
+        t3, _ = third_reader(c["bbox"])
+        n_third += 1
+        first = rec.get("repaired_raw") or rec["raw"]
+        reads = [first, (c.get("alt") or {}).get("text"), t3]
+        voted = vote_number(reads, style)
+        if voted and voted != first.strip():
+            q = parse_cell(voted)
+            if q["kind"] == "number" and q["value"] != "UNPARSED":
+                rec["repaired_raw"] = voted
+                rec["value"] = q["value"]
+                rec["flags"] = [f for f in rec["flags"] if f != "readers_disagree"] + ["voted"]
+
     table = {"label_header": label_header, "columns": columns,
              "rows": [labels[r] for r in body_rows], "cells": records,
              "meta": {**(meta or {}), "header_rows": n_header, "decimals_vote": decimals,
+                      "third_reads": n_third,
                       "headers_snapped": snapped_headers,
                       "n_flagged": sum(1 for r in records
                                       if [f for f in r["flags"] if f not in ("blank", "ok_by_table")])}}

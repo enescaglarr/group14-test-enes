@@ -34,6 +34,24 @@ def plausibility(table):
     return fill * consistency * rows_ok * cols_ok
 
 
+def _third_reader(pre, path_kind):
+    """Crop reader for the ONNX recognizer (None if it is unavailable).
+    Bordered bboxes are already inset from the lines; borderless ones are word
+    boxes and get the same margin as the phrase re-read."""
+    from . import rec_onnx
+    if not rec_onnx.available():
+        return None
+    gray, th = pre["gray"], pre["th"]
+    H, W = gray.shape
+    m = 0 if path_kind == "bordered" else 0.3 * th
+
+    def read(bbox):
+        x0, y0, x1, y1 = bbox
+        crop = gray[max(0, int(y0 - m)):min(H, int(y1 + m)), max(0, int(x0 - m)):min(W, int(x1 + m))]
+        return rec_onnx.read(crop) if crop.size else ("", 0.0)
+    return read
+
+
 def _run(path_kind, pre, meta):
     if path_kind == "bordered":
         from .grid import bordered_cells
@@ -41,7 +59,8 @@ def _run(path_kind, pre, meta):
     else:
         from .borderless import borderless_cells
         cells, R, C = borderless_cells(pre)
-    return assemble(cells, R, C, {**meta, "path": path_kind})
+    return assemble(cells, R, C, {**meta, "path": path_kind},
+                    third_reader=_third_reader(pre, path_kind))
 
 
 def parse_table(path):
