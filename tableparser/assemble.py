@@ -23,19 +23,48 @@ _DEUML = str.maketrans("äöüÄÖÜ", "aouAOU")
 _UMLAUT_FIX = {t.translate(_DEUML).lower(): t for t in GERMAN_TERMS if t.translate(_DEUML) != t}
 
 
-def clean_label(t):
+MATCH_CUTOFF = 0.8        # fuzzy header / label matching
+MAX_LEN_DIFF = 0.3        # ... and the match may differ in length by at most 30 %
+_GERMAN_EXACT = {t.lower() for t in GERMAN_TERMS}
+
+
+def _close(t, choices):
+    """Best fuzzy match with cutoff MATCH_CUTOFF and length difference <= 30 %."""
+    for m in difflib.get_close_matches(t, choices, n=3, cutoff=MATCH_CUTOFF):
+        if abs(len(m) - len(t)) <= MAX_LEN_DIFF * len(m):
+            return m
+    return None
+
+
+def german_hint(texts):
+    """True if the table itself shows German: umlauts/ß, German month names,
+    or a GERMAN_TERMS word as printed. Umlaut restoration needs this hint, so
+    English labels are never 'restored' into German."""
+    for t in texts:
+        if not t:
+            continue
+        if re.search(r"[äöüÄÖÜß]", t) or re.search(r"\b(Mär|Mai|Okt|Dez)\b", t):
+            return True
+        if re.sub(r"\s+", " ", t).strip(" .,:;-_").lower() in _GERMAN_EXACT:
+            return True
+    return False
+
+
+def clean_label(t, german=True):
     if not t:
         return ""
     t = re.sub(r"(?<=[A-Za-zÄÖÜäöüß])[.:,](?=[A-Za-zÄÖÜäöüß])", " ", t)   # "Variant.B"
     t = re.sub(r"[^\w()&%/\- äöüÄÖÜß]", "", t)
     t = re.sub(r"\s+", " ", t).strip(" .,:;-_")
+    if not german:
+        return t
     fixed = _UMLAUT_FIX.get(t.lower())
     if fixed:
         return fixed
     if len(t) >= 6:                        # OCR-damaged German term, e.g. "Jahrestiberschuss"
-        m = difflib.get_close_matches(t, GERMAN_TERMS, n=1, cutoff=0.85)
+        m = _close(t, GERMAN_TERMS)
         if m:
-            return m[0]
+            return m
     return t
 
 
@@ -47,16 +76,22 @@ HEADER_VOCAB = ["Q1", "Q2", "Q3", "Q4", "FY", "Jan", "Feb", "Mär", "Apr", "Mai"
                 "Adjusted", "Metric", "Item", "Position"]
 
 
-def snap_header(t):
+def snap_header(t, german=True):
     if not t or t in HEADER_VOCAB or YEAR.match(t):
         return t, False
     q = re.fullmatch(r"[QqOo0aä]([1-4iIl|])", t)          # "Qi", "a2", "Ql" -> Q1/Q2
     if q:
         d = q.group(1)
         return "Q" + ("1" if d in "iIl|" else d), True
+    if german:                                             # "Mar" -> "Mär" (umlaut restore)
+        folded = {h.translate(_DEUML).lower(): h for h in HEADER_VOCAB if h.translate(_DEUML) != h}
+        if t.translate(_DEUML).lower() in folded:
+            return folded[t.translate(_DEUML).lower()], True
     low = {h.lower(): h for h in HEADER_VOCAB}
-    m = difflib.get_close_matches(t.lower(), list(low), n=1, cutoff=0.6)
-    return (low[m[0]], True) if m else (t, False)
+    m = _close(t.lower(), list(low))
+    if m and not german and low[m] != low[m].translate(_DEUML):
+        m = None                                           # no umlaut words without a German hint
+    return (low[m], True) if m else (t, False)
 
 
 NA_GUESS = re.compile(r"^(w|n|m|o|ni|nl|ri)?[/l1|]?[ae]$|^oma$|^nia$", re.I)
@@ -104,6 +139,8 @@ def assemble(cells, R, C, meta=None):
     if n_header == R:          # no numbers anywhere: assume one header row
         n_header = 1
 
+    german = german_hint([c["text"] for c in cells])
+
     # --- header path per value column (ch. 13-16)
     columns, snapped_headers = [], []
     for k in range(1, C):
@@ -113,19 +150,19 @@ def assemble(cells, R, C, meta=None):
             if i is None or i in seen:
                 continue
             seen.add(i)
-            t, snapped = snap_header(clean_label(cells[i]["text"]))
+            t, snapped = snap_header(clean_label(cells[i]["text"], german), german)
             if t:
                 path.append(t)
                 if snapped:
                     snapped_headers.append(t)
         columns.append(path or [f"col{k}"])
     label_header = " ".join(dict.fromkeys(
-        snap_header(clean_label(cells[at[(r, 0)]]["text"]))[0] for r in range(n_header)
+        snap_header(clean_label(cells[at[(r, 0)]]["text"], german), german)[0] for r in range(n_header)
         if (r, 0) in at and cells[at[(r, 0)]]["text"])) or "label"
 
     # --- body
     body_rows = list(range(n_header, R))
-    labels = {r: clean_label(cells[at[(r, 0)]]["text"]) if (r, 0) in at else "" for r in body_rows}
+    labels = {r: clean_label(cells[at[(r, 0)]]["text"], german) if (r, 0) in at else "" for r in body_rows}
     value_cells = sorted({at[(r, k)] for r in body_rows for k in range(1, C) if (r, k) in at},
                          key=lambda i: (cells[i]["r0"], cells[i]["c0"]))
     for i in value_cells:                       # trailing specks: "56.408,29 kg." (ch. 42)
