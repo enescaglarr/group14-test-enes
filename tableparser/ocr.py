@@ -130,7 +130,8 @@ def ocr_line(crop_gray, th):
     reader's answer when the two readers disagree (challenge 41-44 cross-check)."""
     if crop_gray.size == 0:
         return {"text": "", "conf": 100.0, "alt": None}
-    crop_gray = despeckle(crop_gray, th)
+    if not budget.fast():                   # fast path (T0/T1 triage): no fax specks to remove
+        crop_gray = despeckle(crop_gray, th)
     if not has_ink(crop_gray, th):
         return {"text": "", "conf": 100.0, "alt": None}
     dash = detect_dash(crop_gray, th)
@@ -166,7 +167,8 @@ def ocr_line(crop_gray, th):
         if text[-1:] in "-−" and not _is_bar(bl[-1] if bl else None):
             text, sign_doubt = text[:-1].rstrip(), True
     alt = None
-    if _looks_numeric(text) and not late and not budget.expired():
+    second = not budget.fast() or conf < 60  # fast path: second reader only when unsure
+    if _looks_numeric(text) and second and not late and not budget.expired():
         # second, independent read restricted to number characters
         # different scale + restricted alphabet = different failure modes
         t3, c3 = _tess(_prep(crop_gray, th, 42), 7, NUM_WHITELIST.replace(" ", ""))

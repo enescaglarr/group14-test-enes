@@ -77,9 +77,10 @@ def text_height(bw, clamp=True):
     return float(np.clip(th, TH_MIN, TH_MAX)) if clamp else th
 
 
-def tesseract_word_height(gray):
+def tesseract_word_height(gray, with_conf=False):
     """Median height of confident Tesseract word boxes (None if too few).
-    Independent of specks/dots: those are not returned as words."""
+    Independent of specks/dots: those are not returned as words.
+    with_conf=True also returns the mean confidence of all words (triage)."""
     import pytesseract
     h, w = gray.shape
     s = 1.0
@@ -92,14 +93,21 @@ def tesseract_word_height(gray):
                                   output_type=pytesseract.Output.DICT)
     hs = [d["height"][i] / s for i, t in enumerate(d["text"])
           if t.strip() and float(d["conf"][i]) >= 60 and sum(ch.isalnum() for ch in t) >= 2]
-    return float(np.median(hs)) if len(hs) >= 5 else None
+    med = float(np.median(hs)) if len(hs) >= 5 else None
+    if not with_conf:
+        return med
+    confs = [float(c) for t, c in zip(d["text"], d["conf"]) if t.strip() and float(c) >= 0]
+    return med, (float(np.mean(confs)) if confs else 0.0)
 
 
-def cross_checked_height(gray, bw):
+def cross_checked_height(gray, bw, info=None):
     """Blob estimate, overruled by Tesseract's word-box median when the two
-    disagree by more than 1.5x (blob statistics are fooled by specks / dots)."""
+    disagree by more than 1.5x (blob statistics are fooled by specks / dots).
+    `info` (dict) receives the word confidence for triage."""
     th = text_height(bw)
-    tw = tesseract_word_height(gray)
+    tw, conf = tesseract_word_height(gray, with_conf=True)
+    if info is not None:
+        info["ocr_conf"] = conf
     if tw is not None and not (th / 1.5 <= tw <= th * 1.5):
         th = float(np.clip(tw, TH_MIN, TH_MAX))
     return th
@@ -240,7 +248,12 @@ def preprocess(path):
     gray = crop_dark_frame(load_gray(path))
     # upscale small text: Tesseract works best around 25-35 px text height
     bw0 = binarize(gray)
-    th0 = cross_checked_height(gray, bw0)
+    info = {}
+    th0 = cross_checked_height(gray, bw0, info)
+    # triage (tier guess) from cheap signals of the original image
+    from . import triage
+    tri = triage.features(gray, bw0, th0, info.get("ocr_conf"), estimate_skew)
+    tier = triage.predict(tri)
     scale = float(np.clip(30.0 / th0, 1.0, 3.0))
     if scale > 1.05:
         gray = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
@@ -261,4 +274,5 @@ def preprocess(path):
     ys, xs, vprof = find_lines(hmask, vmask, th)
     xs = long_vlines(xs, vprof, table_height(bw, ys, th))
     return {"gray": gray, "bw": bw, "th": th, "angle": angle, "shear": sh, "scale": scale,
-            "hmask": hmask, "vmask": vmask, "hlines": ys, "vlines": xs}
+            "hmask": hmask, "vmask": vmask, "hlines": ys, "vlines": xs,
+            "triage": tri, "tier": tier}

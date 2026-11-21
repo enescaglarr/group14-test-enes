@@ -48,8 +48,11 @@ def parse_table(path):
     t0 = time.time()
     budget.start()
     pre = preprocess(path)
+    # triage: clean scans (T0/T1) -> fast path, 4 s; photos / faxes -> full path, 12 s
+    budget.set_path(pre.get("tier") in ("T0", "T1"))
     meta = {"source": str(path), "rotation_deg": round(pre["angle"], 2),
-            "shear_deg": round(pre["shear"], 2), "text_height_px": pre["th"]}
+            "shear_deg": round(pre["shear"], 2), "text_height_px": pre["th"],
+            "tier_guess": pre.get("tier"), "fast_path": budget.fast()}
     bordered = len(pre["vlines"]) >= 3     # router (ch. 7-11): needs vertical lines
     table = _run("bordered" if bordered else "borderless", pre, meta)
     if bordered and (len(table["rows"]) < 2 or len(table["columns"]) > MAX_PLAUSIBLE_COLS):

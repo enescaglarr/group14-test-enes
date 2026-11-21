@@ -26,7 +26,8 @@ NUM_START = re.compile(r"^[\d(\-−]")
 
 def _words(pre):
     th = pre["th"]
-    gray = normalize_light(despeckle(pre["gray"], th), th)   # fax specks out first (ch. 4)
+    page = pre["gray"] if budget.fast() else despeckle(pre["gray"], th)   # fax specks out first (ch. 4)
+    gray = normalize_light(page, th)
     words = ocr_words(gray, th)
     out = []
     for w in words:
