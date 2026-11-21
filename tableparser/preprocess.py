@@ -205,7 +205,27 @@ def find_lines(hmask, vmask, th):
     edge = max(10, int(0.015 * W))
     xs = [x for x in xs if edge < x < W - edge]
     ys = [y for y in ys if max(10, int(0.015 * H)) < y < H - max(10, int(0.015 * H))]
-    return ys, xs
+    return ys, xs, vprof
+
+
+def table_height(bw, ys, th):
+    """Vertical extent of the table: outer horizontal rules if there are two,
+    otherwise the ink extent (rows with more than speck-level ink)."""
+    if len(ys) >= 2:
+        return float(ys[-1] - ys[0])
+    clean = remove_specks(bw, max(12, int(0.15 * th * th)))
+    rows = np.where(clean.sum(axis=1) / 255.0 >= 0.5 * th)[0]
+    return float(rows[-1] - rows[0]) if len(rows) else float(bw.shape[0])
+
+
+MIN_VLINE_SHARE = 0.4
+
+
+def long_vlines(xs, vprof, height):
+    """Router guard: a table border runs (almost) the whole table height.
+    Glyph stems lined up in a column of numbers can pass the morphology but
+    cover only a small part of it."""
+    return [x for x in xs if vprof[x] >= MIN_VLINE_SHARE * height]
 
 
 def preprocess(path):
@@ -230,6 +250,7 @@ def preprocess(path):
         gray = shear(gray, sh)
         bw = binarize(gray)
     hmask, vmask = line_masks(bw, th)
-    ys, xs = find_lines(hmask, vmask, th)
+    ys, xs, vprof = find_lines(hmask, vmask, th)
+    xs = long_vlines(xs, vprof, table_height(bw, ys, th))
     return {"gray": gray, "bw": bw, "th": th, "angle": angle, "shear": sh, "scale": scale,
             "hmask": hmask, "vmask": vmask, "hlines": ys, "vlines": xs}
