@@ -3,25 +3,67 @@ import json
 import sys
 import time
 
+from . import budget
 from .assemble import assemble
 from .preprocess import preprocess
 
 
-def parse_table(path):
-    t0 = time.time()
-    pre = preprocess(path)
-    bordered = len(pre["vlines"]) >= 3     # router (ch. 7-11): needs vertical lines
-    if bordered:
+MAX_PLAUSIBLE_COLS = 12
+
+
+def plausibility(table):
+    """How table-like an assembled result is: enough body rows, a sane number
+    of columns, rows that fill about the same number of cells, few blanks."""
+    R, C = len(table["rows"]), len(table["columns"])
+    if R == 0 or C == 0:
+        return 0.0
+    filled = [0] * R
+    blank = 0
+    for rec in table["cells"]:
+        if 0 <= rec["row_index"] < R:
+            if rec["kind"] == "empty" and "blank" in rec["flags"]:
+                blank += 1
+            else:
+                filled[rec["row_index"]] += len(rec["col_index"])
+    fill = 1.0 - blank / max(1, len(table["cells"]))
+    mean = sum(filled) / R
+    spread = (sum((f - mean) ** 2 for f in filled) / R) ** 0.5
+    consistency = max(0.0, 1.0 - spread / max(1.0, C))
+    rows_ok = min(1.0, R / 2.0)
+    cols_ok = 1.0 if C <= MAX_PLAUSIBLE_COLS else MAX_PLAUSIBLE_COLS / C
+    return fill * consistency * rows_ok * cols_ok
+
+
+def _run(path_kind, pre, meta):
+    if path_kind == "bordered":
         from .grid import bordered_cells
         cells, R, C = bordered_cells(pre)
     else:
         from .borderless import borderless_cells
         cells, R, C = borderless_cells(pre)
-    meta = {"source": str(path), "path": "bordered" if bordered else "borderless",
-            "rotation_deg": round(pre["angle"], 2), "shear_deg": round(pre["shear"], 2),
-            "text_height_px": pre["th"]}
-    table = assemble(cells, R, C, meta)
+    return assemble(cells, R, C, {**meta, "path": path_kind})
+
+
+def parse_table(path):
+    t0 = time.time()
+    budget.start()
+    pre = preprocess(path)
+    meta = {"source": str(path), "rotation_deg": round(pre["angle"], 2),
+            "shear_deg": round(pre["shear"], 2), "text_height_px": pre["th"]}
+    bordered = len(pre["vlines"]) >= 3     # router (ch. 7-11): needs vertical lines
+    table = _run("bordered" if bordered else "borderless", pre, meta)
+    if bordered and (len(table["rows"]) < 2 or len(table["columns"]) > MAX_PLAUSIBLE_COLS):
+        # fallback: the line grid gave an implausible table (false vertical lines
+        # from aligned glyph stems, or a grid without body rows) -> try borderless
+        alt = _run("borderless", pre, meta)
+        sb, sa = plausibility(table), plausibility(alt)
+        chosen = alt if sa > sb else table
+        chosen["meta"]["fallback"] = {"tried": "borderless", "bordered_score": round(sb, 3),
+                                      "borderless_score": round(sa, 3),
+                                      "chosen": chosen["meta"]["path"]}
+        table = chosen
     table["meta"]["seconds"] = round(time.time() - t0, 1)
+    table["meta"]["budget_skipped"] = budget.skipped()
     return table
 
 
