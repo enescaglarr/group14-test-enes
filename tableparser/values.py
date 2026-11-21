@@ -9,7 +9,9 @@ def split_unit(s: str):
     m = re.fullmatch(r"(.*?[\d)])\s*(%|€|\$|[A-Za-z]{1,4})", s.strip())
     return (m.group(1), m.group(2)) if m else (s, None)
 
-NUM = re.compile(r"(\d{1,3}(?:[., ]\d{3})*|\d+)(?:([.,])(\d{2}))?")
+# integer part: plain digits or 3-digit groups (a 3-digit group stays a thousands group);
+# decimals: 1 or 2 digits ("500.0", "2,096.2", "22.2", "1.234,56")
+NUM = re.compile(r"(\d{1,3}(?:[., ]\d{3})*|\d+)(?:([.,])(\d{1,2}))?")
 
 CONFUSABLE = str.maketrans({"O": "0", "o": "0", "D": "0", "l": "1", "I": "1", "|": "1",
                             "S": "5", "B": "8", "Z": "2"})
@@ -182,8 +184,9 @@ def resolve_table(raw_cells, min_share: float = 0.8, with_style: bool = False):
     2. vote how many decimals this table uses ('ok' cells, plus 'ambiguous_separator'
        cells, which look like integers with a thousands separator, e.g. '59,333')
     3. repair UNPARSED cells with the voted decimals
-    4. if the table uses 0 or 2 decimals, '59,333' cannot be a 3-decimal number,
-       so ambiguous cells are confirmed as thousands ('ok_by_table')"""
+    4. if the table uses 0, 1 or 2 decimals, '59,333' cannot be a 3-decimal number,
+       so ambiguous cells are confirmed as thousands ('ok_by_table')
+    Repairs (3 and the rebuild below) only run on a clear vote (>= min_share)."""
     parsed = [parse_cell(r) for r in raw_cells]
     counts = {}
     for p in parsed:
@@ -199,7 +202,7 @@ def resolve_table(raw_cells, min_share: float = 0.8, with_style: bool = False):
     for raw, p in zip(raw_cells, parsed):
         if p["value"] == "UNPARSED" and decimals is not None:
             p = repair_with_table_format(raw, decimals)
-        elif p["flag"] == "ambiguous_separator" and decimals in (0, 2):
+        elif p["flag"] == "ambiguous_separator" and decimals in (0, 1, 2):
             p = {**p, "flag": "ok_by_table"}
         elif (p["kind"] == "number" and p["flag"] == "ok" and decimals is not None
               and p.get("decimals", 0) != decimals):
