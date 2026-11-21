@@ -91,3 +91,22 @@ Structure-wrong final tables (night): 20; 4 with an extra column, 6 with an extr
 Worst final tables (night): table_017 (T1 borderless, 7x4 -> 8x5), table_055 (T3 hlines, group-header spans), table_079 (T3 hlines, header depth), table_080 (T0 borderless, group-header spans), table_014 (T2 borderless, extra column), table_066 (T2 grid, merged '—' split).
 
 Notes: seeds used tonight -- 42 dev (untouched), 2026 gen, 7 holdout, 99 triage training, 15 FinTabNet selection, 123 final. Data under `data/` is gitignored (not committed).
+
+## Official submission path
+
+`Dockerfile.tableparser` was folded into the official `submission_template/Dockerfile` and removed; `predict.py` (the template entrypoint, contract unchanged) now calls `tableparser_adapter.main`. Tested exactly as README §7, built for the scoring platform:
+
+    python flatten_dataset.py data/dev flat
+    docker build --platform linux/amd64 -t my-tablesalt -f submission_template/Dockerfile .
+    docker run --rm --network none -v "$PWD/flat:/data/images:ro" -v "$PWD/out:/data/predictions" my-tablesalt
+    python score_all.py --gt data/dev --pred out
+
+| | value |
+|---|---|
+| dev FINAL (score_all) | 0.9724 (TEDSw 0.9852, QA 0.900, CellF1 0.9419) |
+| clean build (no cache) | 76 s |
+| run, 24 tables | 177 s wall, mean 7.3 s, max 12.7 s (table_006) -- amd64 emulated on Apple Silicon |
+| image | 221 MB compressed, ~594 MB on disk (du in container) |
+| format | 24/24 files, keys exactly {text, r, c, rs, cs}, 28 empty cells written, no overlaps or holes |
+
+The amd64 timings are under emulation on an arm64 Mac; the native arm64 run earlier was mean 3.7 s, max 6.5 s. The scoring laptop runs amd64 natively.
