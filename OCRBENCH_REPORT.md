@@ -10,6 +10,9 @@ Measurement only: no tableparser rule was changed for this report. Branch `ocrbe
 
 The single biggest loss is that tableparser returns an **empty table on 87 of 400 samples (22 %)**. Its body-row detector only accepts TableSalt's number formats and rejects one-decimal values like `500.0` or `22.2`. It also needs at least one number per table, so text-only tables come back empty too. Both are generator-specific assumptions that do not hold on real documents.
 
+**After the fixes in section 6** (branch `ocrbench`, TableSalt scores unchanged): TEDS 0.333 → **0.502**,
+TEDS-S 0.479 → 0.636, empty tables 87 → 2.
+
 ## 1. The data
 
 `~/Downloads/OCRBench_v2/OCRBench_v2.json` holds 10,000 samples with the keys `dataset_name`, `type`, `id`, `image_path`, `question` and `answers`. They cover 30 task types:
@@ -135,6 +138,109 @@ Overall, only 70 % of the ground truth's number-like cells parse as numbers for 
 | 8065 | 0.010 | table_to_html | 44×4 → 1×1 | credit-ratings table (`Baa2`, `BBB+`, `STABLE`), no numbers at all | `EN_part/table_parsing_to_html/PPL_2008_page_58_table_0.jpg` |
 
 All paths are relative to the OCRBench v2 root. Sample 8181 (`PNR_2016_page_43_table_0.jpg`) is a clean 8×8 contractual-obligations table and fails the same way. The page OCR finds its words (95; the 40 checked by hand are all right, `Debt obligations 0.8 $ 500.0 $ 2,096.2 …`), but every value has one decimal.
+
+## 6. Fixing the general errors (fix1–fix5)
+
+Sections 1–5 describe the submitted system. This section covers five rule changes made after them,
+one commit each, now on branch `ocrbench` (`main` is untouched).
+
+**Acceptance rule:** a step is kept only if none of dev, gen, holdout or final drops by more than 0.002
+FINAL against the previous kept step. All five were kept.
+
+Protocol (details in `ABLATION_REPORT.md`):
+- **Scores:** 4 parallel processes with the time budget scaled by 4. Outputs are byte-identical to a
+  single-process run.
+- **Budget re-runs:** tables where the time budget cut work were measured again with 3 processes.
+- **Seconds:** one process on a fixed 30-table sample, plus the two Rotowire tables timed separately.
+- **OCRBench:** the fixed 100-sample subset (seed 100) for every step. The full 400 for the base and
+  for the last kept step.
+
+| step | commit | change | dev / gen / holdout / final FINAL | OCRBench-100 TEDS (TEDS-S) | empty tables (of 100) | s / table mean / max | Rotowire_44 / _154 s | kept |
+|---|---|---|---|---|---|---|---|---|
+| base | eb7dab3 | submitted system | 0.9704 / 0.9583 / 0.9539 / 0.9573 | 0.335 (0.497) | 19 | 3.16 / 8.8 | 18.2 / 14.5 | — |
+| fix1 | 2fa34bf | numbers with 1 or 2 decimals; decimal vote over 0/1/2 | same | 0.405 (0.564) | 12 | 3.22 / 7.5 | 18.4 / 15.7 | yes |
+| fix2 | 7ff7856 | tables without numbers: header from the top row(s) above the first rule, never an empty table | same | 0.433 (0.607) | 1 | 3.38 / 9.3 | 18.4 / 14.5 | yes |
+| fix3 | 177aab2 | > 150 cells: first read only; 12 s hard limit | same | 0.433 (0.607) | 1 | 3.11 / 7.1 | **12.3** / **13.0** | yes |
+| fix4 | d61ff7b | a lone `$ € £` before a number joins it as its unit | same | **0.478** (0.622) | 1 | 3.38 / 8.0 | 12.4 / 13.3 | yes |
+| fix5 | 9d63eb0 | repairs map OCR letter look-alikes to digits first (`1O7.00` → 107.00), incl. `; : · '` | same | 0.478 (0.622) | 1 | 3.36 / 7.9 | 12.6 / 14.0 | yes |
+
+"Same" means identical FINAL on all four sets. One exception: final TEDS-weighted is 0.9674 for fix5
+against 0.9675 for the base (cell F1 0.9046 against 0.9050), and FINAL is 0.9573 for both. The
+timing-sample differences between steps (3.1–3.4 s mean) are within run-to-run noise. Only the
+Rotowire column moves.
+
+### OCRBench, full 400: before and after
+
+| | base | fix5 | InternVL2.5-26B |
+|---|---|---|---|
+| TEDS | 0.333 | **0.502** | 0.611 |
+| TEDS-S | 0.479 | **0.636** | 0.787 |
+| empty tables (1×1) | 87 | **2** | — |
+| table_to_html (316) TEDS | 0.337 | 0.529 | 0.534 |
+| MMTab HTML (65) TEDS | 0.283 | 0.380 | 0.891 |
+| MMTab Markdown (19) TEDS | 0.433 | 0.470 | 0.925 |
+
+- **Per sample:** 273 of 400 improve, 12 get worse, and 115 are unchanged. The largest drop is ToTTo
+  sample 8115 (−0.39). It goes from 2×3 to 2×4 against a 2×5 truth: closer in column count, but the
+  cells shift and their text no longer lines up.
+- **Versus InternVL:** on the annual-report crops (`table_to_html`), tableparser now matches
+  InternVL2.5-26B (0.529 vs 0.534). The MMTab gap stays large: those are rendered web and text tables,
+  with layouts TableSalt never has.
+
+**Error types (primary type, TEDS < 0.9, same rules as section 5):**
+
+| type | base | fix5 |
+|---|---|---|
+| table not found / text around it | 98 | **10** |
+| multi-line cell | 57 | 95 |
+| columns wrong | 113 | 81 |
+| header depth | 35 | 34 |
+| merged cells | 25 | 49 |
+| other (structure right) | 71 | 128 |
+
+The not-found errors are almost gone. Multi-line cells and merged cells now come first: tables that used
+to be empty are found, and their next problem shows. These two are the obvious next steps. Neither was
+in scope here.
+
+**Worst 5 after the fixes:**
+
+| id | TEDS | why | image |
+|---|---|---|---|
+| 7829 | 0.024 | InfoTabs infobox (14×2) still comes back empty, unchanged from the base; cause not investigated | `EN_part/table_parsing_en_MMTab/InfoTabs_T1179.jpg` |
+| 8182 | 0.048 | TabFact 44×6 → 151×3: wrapped lines become rows, columns merge | `EN_part/MMTab/TabFact_2-17916431-2.html.csv.jpg` |
+| 7919 | 0.066 | WikiBIO infobox 12×2 → 2×2, unchanged from the base: only a colour-code row (`bscolour`, `6495ed`) is kept | `EN_part/table_parsing_en_MMTab/WikiBIO_test_29612196.jpg` |
+| 8084 | 0.075 | InfoTabs infobox 11×2: empty in the base, now 2×2, most rows still missing | `EN_part/table_parsing_en_MMTab/InfoTabs_T2103.jpg` |
+| 7865 | 0.077 | annual-report table 11×4: empty in the base, now 3×1 | `EN_part/table_parsing_to_html/PPL_2018_page_148_table_0.jpg` |
+
+### Time (fix3)
+
+Rotowire_test_table_44 is a 30×17 grid with 510 cells. It took 18.2 s in the submitted system and now
+ends at 12.3–12.6 s. The 12 s hard limit leaves 120–157 cells unread; the number depends on the run.
+Rotowire_test_table_154 drops from 14.5 to 13.0–14.0 s with all cells read. Before the fix, the first
+table went past the official 15 s limit and would have been lost entirely. Now it returns in time,
+partly read.
+
+Both tables are still slow because the reader starts one Tesseract process per cell. Reading a large
+grid with one page-level OCR pass and assigning the words to the cells would remove the unread cells.
+That was not in scope.
+
+On TableSalt, no table reaches 150 cells, so fix3 never triggers there.
+
+### fix5: what it changed
+
+On gen + final, fix4 → fix5 changed **0 cells**, and the `; : · '` extension (fix5 against its narrow
+variant) also changed **0 cells**. Dev, holdout and OCRBench-100 show no change either. The repair
+path never met a number with a letter look-alike in these runs: only 5 of the 17,981 output cells of
+fix4 contain one, and none of them goes through the repair path. fix5 is kept because it costs nothing.
+It fixes the case shown in the unit checks (`1O7.00`, `1O7;00` → 107.00, with `Sulfur`, `see note 3`,
+`n/a` and `Ablation 3` unchanged), but these sets do not show a measurable effect.
+
+### Budget-limited tables after re-measurement
+
+After the 3-process re-runs, the time budget still cuts work in 2 TableSalt tables (holdout table_052 in
+fix2, gen table_032 in fix5). Both also exceed the 4 s fast-path budget in a single process, and only
+the optional second reads are skipped. On OCRBench-400 with fix5, 6 large tables remain affected,
+including both Rotowire tables.
 
 ## Reproduce
 
