@@ -226,6 +226,23 @@ That was not in scope.
 
 On TableSalt, no table reaches 150 cells, so fix3 never triggers there.
 
+**Follow-up (1e3fe22): the hard limit is for large tables only.** In the first version of fix3 the 12 s
+limit applied to every table. The amd64 container test under emulation on an Apple Silicon Mac makes
+every Tesseract call about twice as slow, and there 6 dev tables hit the limit with cells unread:
+container FINAL 0.918, against 0.967 for v1. The official limit is a total (5 min + 15 s per table), so
+normal tables are now always read to the end; only tables with more than 150 cells keep the 12 s limit.
+
+| | FINAL | dev / gen / holdout / final |
+|---|---|---|
+| container, amd64 emulated: v1 / v2 | 0.9666 / **0.9686** | — |
+| container, native arm64: v1 / v2 | 0.9723 / 0.9723 (all 24 outputs byte-identical) | — |
+| local runs (protocol above), against fix5 | — | 0.9704 / 0.9583 / 0.9535 / 0.9573 |
+
+Against fix5, only holdout table_052 differs. It exceeds the 4 s fast-path budget in a single process
+too, so its optional reads vary from run to run. The resulting −0.0004 on holdout is within the 0.002
+rule. Rotowire_44 / _154 still end at 12.4 / 12.2 s. On the 30-table timing sample: mean 3.49 s,
+max 8.0 s.
+
 ### fix5: what it changed
 
 On gen + final, fix4 → fix5 changed **0 cells**, and the `; : · '` extension (fix5 against its narrow
